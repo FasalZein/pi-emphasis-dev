@@ -16,7 +16,6 @@ It changes only what is drawn. Stored messages, copied text and HTML exports kee
 |---|---|---|
 | [Pi](https://github.com/earendil-works/pi) 1.5 or newer (checked on 1.5.0) | This is a Pi extension | It cannot be installed |
 | A [Nerd Font](https://www.nerdfonts.com/) in your terminal | The icons and the rounded pill ends are Nerd Font symbols | You see empty boxes. Set `PI_EMPHASIS_PILL_ICONS=0` and `PI_EMPHASIS_ROUND_CAPS=0` for plain square chips |
-| An agent that writes pills | The extension draws pills; it does not write them | Bold, arrows and labels are still colored, but no pills appear. See [Teach your agent](#teach-your-agent) |
 | `git` | `pi install` clones this repository | The install fails |
 
 Checked on macOS only.
@@ -33,9 +32,18 @@ Then run `/reload` in Pi, or start Pi again.
 - Try once without installing: `pi -e git:github.com/johnlindquist/pi-emphasis`
 - Remove: `pi remove git:github.com/johnlindquist/pi-emphasis`
 
-## Teach your agent
+## The rules come with it
 
-Agents write pills only when told to. Paste the paragraphs in [`AGENTS-snippets.md`](AGENTS-snippets.md) into your `AGENTS.md`. They tell the agent which words to use, when a pill is required, and to write labels as plain words so the extension can add the icons.
+An agent writes pills only when it is told how. In Pi's terminal interface the extension adds a `reply_style` section to the system prompt on every run, so there is nothing to paste into an `AGENTS.md`. The section tells the agent:
+
+- which words to use for each color, and that every failure, ask and unchecked claim needs its pill
+- to open a reply with the kind of work it understood, and to mark consequences and ownership
+- to follow each attention pill with the action it calls for, such as the fastest check after `[[Unverified]]`
+- to write labels as plain words, because the extension adds the icons
+
+The word lists in that section are read from the same tables that color the pills, so the rules and the drawing cannot drift apart. It adds about 1,500 tokens to the prompt. Print, JSON and RPC runs do not get the section, since nothing there draws pills.
+
+To keep the drawing and write your own rules, set `PI_EMPHASIS_GUIDANCE=0`.
 
 ## Pills
 
@@ -75,8 +83,9 @@ Environment variables, read when Pi starts:
 - `PI_EMPHASIS_COLOR`: theme color for bold text (default `mdLink`).
 - `PI_EMPHASIS_ROUND_CAPS=0`: square chips, for fonts without Nerd Font symbols.
 - `PI_EMPHASIS_PILL_ICONS=0`: no icons in pills or on labels.
+- `PI_EMPHASIS_GUIDANCE=0`: do not add the reply-style rules to the prompt.
 
-To add a word, an icon or a synonym, edit the tables at the top of [`index.ts`](index.ts).
+To add a word, an icon or a synonym, edit the tables at the top of [`index.ts`](index.ts). The rules are the `replyGuidance` function in the same file.
 
 ## Limits
 

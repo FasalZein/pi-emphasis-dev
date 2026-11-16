@@ -1,7 +1,7 @@
 {
   "name": "pi-emphasis",
-  "version": "0.1.0",
-  "description": "Colored status pills with icons, labeled headings and colored bold for assistant replies in Pi's terminal.",
+  "version": "0.2.0",
+  "description": "Colored status pills with icons, labeled headings and colored bold for assistant replies in Pi's terminal, with the rules that teach the agent to write them.",
   "license": "MIT",
   "type": "module",
   "keywords": ["pi-package", "pi", "markdown", "terminal", "pills"],
@@ -12,7 +12,7 @@
   "pi": {
     "extensions": ["./index.ts"]
   },
-  "files": ["index.ts", "README.md", "AGENTS-snippets.md", "LICENSE"],
+  "files": ["index.ts", "README.md", "LICENSE"],
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=1.5.0 <2"
   },

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createPalette, decorate, toneOf, type ThemeLike } from "../index.ts";
+import { CONTEXT_WORDS, VOCABULARY, createPalette, decorate, replyGuidance, toneOf, type ThemeLike } from "../index.ts";
 
 // A theme whose colors are readable tags, so tests can assert on what was colored.
 const theme = {
@@ -80,4 +80,28 @@ test("icons can be turned off", () => {
 	} finally {
 		delete process.env.PI_EMPHASIS_PILL_ICONS;
 	}
+});
+
+describe("reply guidance", () => {
+	const text = replyGuidance();
+	test("names every core word, and each one is colored as its tone", () => {
+		for (const [tone, words] of Object.entries(VOCABULARY)) {
+			for (const word of words.core) {
+				expect(text).toContain(`[[${word}]]`);
+				expect(toneOf(word)).toBe(tone as never);
+			}
+		}
+		for (const word of CONTEXT_WORDS) expect(text).toContain(`[[${word}]]`);
+	});
+	test("every pill it mentions is a known word, so no example teaches an uncolored one", () => {
+		const known = new Set([...Object.values(VOCABULARY).flatMap((w) => w.core), ...CONTEXT_WORDS, "Word"]);
+		for (const [, label] of text.matchAll(/\[\[([^\]]+)\]\]/g)) expect([...known].some((k) => label === k || label.startsWith(`${k} `) || label.startsWith(`${k}:`))).toBe(true);
+	});
+	test("every lead-in it lists gets an icon", () => {
+		for (const word of ["Check", "Do", "Next", "Unblock", "Left", "Run", "Guard", "Undo", "See"]) {
+			expect(text).toContain(`**${word}:**`);
+			expect(plain(`x **${word}:** y`)).not.toBe(`x **<mdLink>${word}:</>** y`);
+		}
+	});
+	test("addresses any user", () => expect(text).not.toMatch(/\bJohn\b|~\/dev/));
 });
