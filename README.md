@@ -61,6 +61,7 @@ Write `[[Word]]` beside the thing it describes. The word decides the color and t
 ## Labels and shapes
 
 - **Headings and lead labels.** A `##` heading, or bold text at the start of a line or list item, takes an icon when it is one of: Finding, Result, Status, Evidence, Cause, Effect, Fix, Risk, Limits, Cost, Decision, Options, Plan, Next, Why, How, Rule, Example, Checked, Verdict, Rollback, Undo, Review, Scoreboard, Terminal, Folder, File, Branch, Ideas, Pills, Colors, Icons. A trailing colon is fine.
+- **Action lead-ins.** Bold **Check:**, **Do:**, **Next:**, **Unblock:**, **Left:**, **Run:**, **Guard:**, **Undo:** and **See:** take an icon anywhere in a line, so the action that follows a pill is easy to find: `[[Unverified]] the red pills on your screen. **Check:** run /reload.` The colon is required.
 - **Bold.** `**anchor term**` keeps its weight and takes the theme's link color.
 - **Marks.** `✓` takes the success color, `✗` the error color, and `→` the accent color.
 - **Trees.** `├──` and `└──` are dimmed so the content stands out.

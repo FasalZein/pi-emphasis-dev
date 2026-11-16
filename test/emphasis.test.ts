@@ -50,6 +50,15 @@ describe("labels", () => {
 	test("bold later in a line gets color but no icon", () => expect(plain("see **Cause** here")).toBe("see **<mdLink>Cause</>** here"));
 });
 
+describe("action lead-ins", () => {
+	test("take an icon anywhere in a line when they end in a colon", () => {
+		expect(plain("[[Unverified]] red pills. **Check:** run it")).toBe("|\uf128 Unverified| red pills. **<mdLink>\uf046 Check:</>** run it");
+		expect(plain("- **Unblock:** access")).toBe("- **<mdLink>\uf09c Unblock:</>** access");
+	});
+	test("get exactly one icon at the start of a line", () => expect(plain("**Next:** go")).toBe("**<mdLink>\uf061 Next:</>** go"));
+	test("without a colon they are ordinary bold", () => expect(plain("please **do** it and **run** that")).toBe("please **<mdLink>do</>** it and **<mdLink>run</>** that"));
+});
+
 describe("what is left alone", () => {
 	test("fenced code", () => {
 		const block = "```\n**Cause:** → [[Done]]\n```";

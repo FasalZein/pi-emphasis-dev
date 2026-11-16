@@ -164,10 +164,17 @@ export function decorate(markdown: string, palette: Palette): string {
 	return out.join("\n");
 }
 
+/** Lead-in words that name the action a pill calls for. With a colon they take an icon anywhere in a line. */
+const ACTION_ICONS: Record<string, string> = {
+	check: "\uf046", do: "\uf0a4", next: "\uf061", unblock: "\uf09c", left: "\uf141", run: "\uf04b", guard: "\uf132", undo: "\uf0e2", see: "\uf08e",
+};
+const ACTION_LABEL = new RegExp(`(\\*\\*)(${Object.keys(ACTION_ICONS).join("|")})(:\\*\\*)`, "gi");
+
 /** Prefix a known label with its icon, unless it already opens with a glyph. */
 function withLabelIcon(label: string): string {
 	if (OWN_ICON.test(label) || process.env.PI_EMPHASIS_PILL_ICONS === "0") return label;
-	const icon = LABEL_ICONS[label.replace(/[:\s]+$/, "").trim().toLowerCase()];
+	const word = label.replace(/[:\s]+$/, "").trim().toLowerCase();
+	const icon = LABEL_ICONS[word] ?? (label.trimEnd().endsWith(":") ? ACTION_ICONS[word] : undefined);
 	return icon ? `${icon} ${label}` : label;
 }
 
@@ -200,6 +207,7 @@ function decorateLine(line: string, palette: Palette, open: string, close: strin
 			continue;
 		}
 		let prose = part;
+		if (process.env.PI_EMPHASIS_PILL_ICONS !== "0") prose = prose.replace(ACTION_LABEL, (_, before: string, word: string, after: string) => `${before}${ACTION_ICONS[word.toLowerCase()]} ${word}${after}`);
 		if (palette.passed) prose = prose.replace(/[✓✔]/g, (m) => palette.passed!(m) + (inBold ? open : ""));
 		if (palette.failed) prose = prose.replace(/[✗✘]/g, (m) => palette.failed!(m) + (inBold ? open : ""));
 		if (palette.arrow) prose = prose.replace(/→/g, (m) => palette.arrow!(m) + (inBold ? open : ""));
