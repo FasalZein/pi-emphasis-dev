@@ -15,10 +15,11 @@ It changes only what is drawn. Stored messages, copied text and HTML exports kee
 | You need | Why | Without it |
 |---|---|---|
 | [Pi](https://github.com/earendil-works/pi) 1.5 or newer (checked on 1.5.0) | This is a Pi extension | It cannot be installed |
-| A [Nerd Font](https://www.nerdfonts.com/) in your terminal | The icons and the rounded pill ends are Nerd Font symbols | You see empty boxes. Set `PI_EMPHASIS_PILL_ICONS=0` and `PI_EMPHASIS_ROUND_CAPS=0` for plain square chips |
+| A terminal that can draw [Nerd Font](https://www.nerdfonts.com/) symbols | The icons and the rounded pill ends are Nerd Font symbols | You see empty boxes or question marks. See [Set up your terminal](#set-up-your-terminal) |
+| A terminal with color | Pills are colored backgrounds | Pills are drawn in reverse video, all in one color |
 | `git` | `pi install` clones this repository | The install fails |
 
-Checked on macOS only.
+Checked on macOS only. Setup takes about two minutes if your terminal already has the symbols.
 
 ## Install
 
@@ -31,6 +32,47 @@ Then run `/reload` in Pi, or start Pi again.
 - Update: `pi update --extensions`
 - Try once without installing: `pi -e git:github.com/johnlindquist/pi-emphasis`
 - Remove: `pi remove git:github.com/johnlindquist/pi-emphasis`
+
+## Set up your terminal
+
+**1. Check whether your terminal already draws the symbols.** Paste this into your shell:
+
+```sh
+printf '\ue0b6\uf00c \uf128 \uf007\ue0b4\n'
+```
+
+You should see a half circle, a check mark, a question mark, a person and another half circle. If you do, skip to step 3. Ghostty, kitty and WezTerm include these symbols, so they usually pass with any font.
+
+**2. If you see boxes, install a Nerd Font and select it.** On macOS with Homebrew:
+
+```sh
+brew install --cask font-jetbrains-mono-nerd-font
+```
+
+Or download any family from [nerdfonts.com](https://www.nerdfonts.com/font-downloads). Then choose it as the terminal's font and run the check again:
+
+| Terminal | Where the font is set |
+|---|---|
+| iTerm2 | Settings, Profiles, Text, Font |
+| macOS Terminal | Settings, Profiles, Text, Font |
+| VS Code terminal | the `terminal.integrated.fontFamily` setting, for example `JetBrainsMono Nerd Font` |
+| Alacritty | `font.normal.family` in `alacritty.toml` |
+
+To keep your current font, install only the symbols with `brew install --cask font-symbols-only-nerd-font` and add "Symbols Nerd Font" as a fallback font where your terminal supports one.
+
+**3. Check it in Pi.** After installing the extension and running `/reload`, ask:
+
+> Reply with one line that uses the pills [[Done]], [[Needs you]], [[Failed]] and [[Costs money]].
+
+You should see four rounded pills in green, yellow, soft red and solid red, each with an icon.
+
+**No Nerd Font, or you prefer plain chips?** Start Pi with the icons and rounded ends turned off. To make it permanent, put the two `export` lines in your shell profile, such as `~/.zshrc`:
+
+```sh
+export PI_EMPHASIS_PILL_ICONS=0
+export PI_EMPHASIS_ROUND_CAPS=0
+pi
+```
 
 ## The rules come with it
 
@@ -78,7 +120,7 @@ Your own messages, inline code, fenced code and escaped asterisks are left alone
 
 ## Settings
 
-Environment variables, read when Pi starts:
+Environment variables. Set them in the shell before starting Pi, or in your shell profile:
 
 - `PI_EMPHASIS_COLOR`: theme color for bold text (default `mdLink`).
 - `PI_EMPHASIS_ROUND_CAPS=0`: square chips, for fonts without Nerd Font symbols.
@@ -87,12 +129,23 @@ Environment variables, read when Pi starts:
 
 To add a word, an icon or a synonym, edit the tables at the top of [`index.ts`](index.ts). The rules are the `replyGuidance` function in the same file.
 
+## Troubleshooting
+
+| You see | Cause | Fix |
+|---|---|---|
+| `[[Done]]` as plain text | The extension is not loaded | Run `/reload`. Check that `pi list` shows pi-emphasis |
+| Boxes or question marks in or around pills | The terminal has no Nerd Font symbols | [Set up your terminal](#set-up-your-terminal), or turn icons and rounded ends off |
+| Icons that overlap the next letter | The font draws its icons two cells wide | Use the "Mono" variant of the Nerd Font, such as JetBrainsMono Nerd Font Mono |
+| Pills that are all one color, in reverse video | Pi's theme has no panel colors, which happens with the `system` theme when the terminal reports none | Choose a theme with `/theme`, such as `dark` |
+| Solid red, cyan or blue pills in odd shades | Those three use your terminal's own colors | Change the terminal's color theme |
+| Bold that looks no heavier than normal text | The terminal draws normal text at a medium weight, or its font has no real bold | Choose a font with a distinct bold. In Ghostty, `font-style-bold` selects a heavier face |
+| The agent writes no pills | The rules reach the agent only in Pi's terminal interface, and not when `PI_EMPHASIS_GUIDANCE=0` | Unset the variable. Print, JSON and RPC runs never get the rules |
+| Pills inside code blocks stay as typed | Code is left alone on purpose | Nothing to fix |
+
 ## Limits
 
 - A bold span that continues onto a second source line is colored only on its first line.
-- Pills take their soft colors from the Pi theme's panel colors. When the terminal reports no colors, Pi's system theme has none, so pills are drawn in reverse video.
-- The solid pills use the terminal's own red, cyan and blue, so their exact shade follows your terminal theme.
-- If bold looks no heavier than normal text, that is your terminal or font, not this extension. Some terminals draw normal text at a medium weight, which leaves little room for bold.
+- Checked on macOS only, in Ghostty and the Herdr app.
 
 ## Development
 
