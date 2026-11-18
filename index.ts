@@ -415,8 +415,10 @@ function draw(lines: string[], palette: Palette): Drawing {
 function decorate(markdown: string, palette: Palette, streaming = false, cache?: { head?: Head }): string {
 	let head = cache?.head;
 	if (head && (head.palette !== palette || !markdown.startsWith(head.text))) head = undefined;
-	const lines = (head ? markdown.slice(head.text.length) : markdown).split("\n");
+	const restText = head ? markdown.slice(head.text.length) : markdown;
+	const lines = restText.split("\n");
 	const drawing = draw(lines, palette);
+	const drawn = drawing.lines.join("\n");
 	const scoreboard = (head?.scoreboard ?? false) || drawing.scoreboard;
 	const pills = head ? [...head.pills, ...drawing.pills] : drawing.pills;
 	// The count line waits for the whole reply: drawn while streaming, it would move the text below it.
@@ -427,14 +429,21 @@ function decorate(markdown: string, palette: Palette, streaming = false, cache?:
 		const [open, close] = boldEnds(palette);
 		all.splice(countPlace(head ? [...head.read, ...drawing.read] : drawing.read), 0, drawProse(line, [], palette, open, close), "");
 		out = all.join("\n");
-	} else out = (head?.out ?? "") + drawing.lines.join("\n");
+	} else out = (head?.out ?? "") + drawn;
 	// Move the newly finished blocks into the head. The boundary line must end with a line break here, so
 	// that the head's text is a prefix of this reply.
 	if (cache && drawing.boundary >= 0 && drawing.boundary < lines.length - 1) {
 		const n = drawing.boundary + 1;
 		const next: Head = head ?? { palette, text: "", out: "", lines: [], read: [], pills: [], scoreboard: false };
-		next.text += lines.slice(0, n).join("\n") + "\n";
-		next.out += drawing.lines.slice(0, n).join("\n") + "\n";
+		// Lines 0..n-1 with their line breaks, cut from the joined text and drawing instead of joined again.
+		let textLength = 0;
+		let outLength = 0;
+		for (let i = 0; i < n; i++) {
+			textLength += lines[i].length + 1;
+			outLength += drawing.lines[i].length + 1;
+		}
+		next.text += restText.slice(0, textLength);
+		next.out += drawn.slice(0, outLength);
 		for (let i = 0; i < n; i++) {
 			next.lines.push(drawing.lines[i]);
 			next.read.push(drawing.read[i]);
