@@ -21,7 +21,7 @@
 //     settings.json sets edges, icons, label color, tone colors and fill (readSettings()).
 import type { ExtensionAPI, Theme, ThemeBg, ThemeColor, ThemeToken } from "@earendil-works/pi-coding-agent";
 import { backgroundAnsi, type Color, colorToRgb, foregroundAnsi, mixColors, parseColor, type RgbColorValue, rgbColor } from "@earendil-works/pi-tui";
-import { countPlace, mayDefine, type Range, type ReadLine, readBlocks, readMarkdown } from "./reader.ts";
+import { countPlace, type EndState, mayDefine, type Range, type ReadLine, readBlocks, readMarkdown } from "./reader.ts";
 
 type Colorize = (text: string) => string;
 type PillTone = "success" | "error" | "warning" | "ask" | "danger" | "mode" | "owner" | "neutral";
@@ -374,6 +374,8 @@ interface Drawing {
 	/** The number of pills drawn and whether a scoreboard was seen in lines 0..boundary. */
 	pillsAtBoundary: number;
 	scoreboardAtBoundary: boolean;
+	/** The reader's state after the last line. */
+	end: EndState;
 }
 
 /**
@@ -405,7 +407,7 @@ const boldEnds = (palette: Palette) => {
 
 /** Draws each line of a reply; every output line is the drawing of the input line with the same index. */
 function draw(lines: string[], palette: Palette): Drawing {
-	const { read, boundary } = readBlocks(lines);
+	const { read, boundary, end } = readBlocks(lines);
 	const [open, close] = boldEnds(palette);
 	const pills: string[] = [];
 	let scoreboard = false;
@@ -422,7 +424,7 @@ function draw(lines: string[], palette: Palette): Drawing {
 		if (literal.length === 0 && PILLS_ONLY.test(line)) scoreboard = true;
 		return drawProse(line, literal, palette, open, close, pills);
 	});
-	return { lines: out, pills, scoreboard, read, boundary, pillsAtBoundary, scoreboardAtBoundary };
+	return { lines: out, pills, scoreboard, read, boundary, pillsAtBoundary, scoreboardAtBoundary, end };
 }
 
 /**
@@ -449,7 +451,9 @@ function decorate(markdown: string, palette: Palette, streaming = false, cache?:
 	// Streaming only: an unfinished tail waits until it completes, so it never shows raw and then jumps.
 	if (streaming) {
 		const last = lines.length - 1;
-		const from = heldFrom(lines[last], drawing.read[last]);
+		// pi reads the drawn text, where a "$" before a digit is escaped: such a sign opens no pending math there.
+		const end = drawing.end.literal && lines.some((l) => DOLLAR_DIGIT.test(l)) ? readBlocks(lines.map(escapeCurrency)).end : drawing.end;
+		const from = heldFrom(lines[last], drawing.read[last], end);
 		// The text before a held tail loses its trailing spaces; a line left empty goes, with its line break.
 		const kept = from >= 0 ? lines[last].slice(0, from).replace(/[ \t]+$/, "") : undefined;
 		const cut = kept === "" ? HOLD_LINE : from;
@@ -482,12 +486,12 @@ function decorate(markdown: string, palette: Palette, streaming = false, cache?:
 		const [open, close] = boldEnds(palette);
 		const read = head ? [...head.read, ...drawing.read] : drawing.read;
 		// After the last block, so nothing above it moves; a reply that ends inside a block a blank line does
-		// not close (an open fence, HTML block or math) keeps the count line at its place near the top.
-		// Only a reply whose last text is code can end open. By readBlocks' boundary rule the lines after the
-		// boundary end in the state the whole reply ends in.
+		// not close keeps the count line at its place near the top: an open HTML block of types 1, 3-5 or display
+		// math (the reader's end state), or an open fence or comment (whose last text is code; the sentinel read).
+		// By readBlocks' boundary rule the lines after the boundary end in the state the whole reply ends in.
 		let lastText = read.length - 1;
 		while (lastText >= 0 && read[lastText].kind === "blank") lastText--;
-		const atEnd = read[lastText]?.kind === "code" && endsOpen(lines.slice(drawing.boundary + 1)) ? countPlace(read) : all.length;
+		const atEnd = drawing.end.open || (read[lastText]?.kind === "code" && endsOpen(lines.slice(drawing.boundary + 1))) ? countPlace(read) : all.length;
 		if (atEnd === all.length) {
 			all.push("", drawProse(line, [], palette, open, close));
 			allBreaks?.push("\n", "\n");
@@ -527,41 +531,108 @@ function decorate(markdown: string, palette: Palette, streaming = false, cache?:
 
 /** heldFrom: the whole last line waits, with the line break before it. */
 const HOLD_LINE = -2;
-/** The longest text an unfinished pill or bold label may hold before it shows raw: the 32 label characters and its marker. */
-const HOLD_MAX = 34;
-/** Text that may be or turn into code, math or HTML: a tail that holds it is never held. */
-const MAY_BE_LITERAL = /[`$<\\]/;
+/** The most label characters an unfinished pill or bold may hold and still wait: a pill label has 1 to 32 (PILL). */
+const HOLD_LABEL = 32;
+/** Signs that may open code, math, HTML or an escape: a held tail never holds one. */
+const LITERAL_SIGN = /[`$<\\]/;
+const UNFINISHED_PILL = new RegExp(String.raw`^\[\[[^\[\]\n]{0,${HOLD_LABEL}}\]?$`);
+const COMPLETE_PILL = new RegExp(PILL_SKIP, "g");
+const WHITESPACE = /\s/;
+const PUNCTUATION = /[\p{P}\p{S}]/u;
+const escapeCurrency = (line: string) => line.replace(CURRENCY, (_, before: string) => before + "\\$");
 const UNESCAPED_AT = (line: string, at: number) => (line.slice(0, at).match(/\\*$/)![0].length % 2 === 0);
+
 /**
  * Where the last line of a streaming reply is cut so that its unfinished tail waits: -1 to keep it all,
  * HOLD_LINE for an unfinished heading (pi trims the text, so a heading is finished only when a line follows),
- * otherwise the index of an unfinished trailing pill ("[[Wor", "["), an unclosed bold ("**Resu", "*").
- * Only prose and heading text is held, and never in a line whose text outside literal ranges holds a sign
- * that may open literal text.
+ * otherwise the index of an unfinished trailing pill ("[[Wor", "["), or of an opening bold marker that nothing
+ * closes yet ("**Resu", "__Resu", a lone "*" or "_" after a space).
+ * Nothing waits when the reply may end in literal text (an HTML block or paragraph, pending math), when the
+ * tail is in a literal range or holds a sign that may open one, or when something before the tail on its line
+ * may open literal text that reaches into it (an unclosed backtick, "<", math "$", "\\(" or "\\[").
  */
-function heldFrom(line: string, read: ReadLine): number {
-	if (read.kind === "heading") return read.literal.length === 0 && !MAY_BE_LITERAL.test(line) ? HOLD_LINE : -1;
+function heldFrom(line: string, read: ReadLine, end: EndState): number {
+	if (end.literal) return -1;
+	if (read.kind === "heading") return read.literal.length === 0 && !mayOpenLiteral(line, [], line.length) ? HOLD_LINE : -1;
 	if (read.kind !== "prose" || line === "") return -1;
-	let cut = line.length;
+	const candidates: number[] = [];
 	const open = line.lastIndexOf("[[");
-	if (open >= 0 && line.length - open <= HOLD_MAX && /^\[\[[^\[\]\n]*\]?$/.test(line.slice(open)) && UNESCAPED_AT(line, open)) cut = open;
-	else if (line.endsWith("[") && !line.endsWith("[[") && UNESCAPED_AT(line, line.length - 1)) cut = line.length - 1;
-	const stars: number[] = [];
-	const inLiteral = (i: number) => read.literal.some(([start, end]) => i >= start && i < end);
-	for (let i = line.indexOf("**"); i >= 0; i = line.indexOf("**", i + 2)) if (UNESCAPED_AT(line, i) && !inLiteral(i)) stars.push(i);
-	const lastStar = stars[stars.length - 1];
-	if (stars.length % 2 === 1 && line.length - lastStar <= HOLD_MAX) cut = Math.min(cut, lastStar);
-	else if (/(^|\s)\*$/.test(line)) cut = Math.min(cut, line.length - 1);
-	if (cut === line.length || read.literal.some(([, end]) => end > cut)) return -1;
-	// An unclosed backtick, a "$" or a "<" anywhere outside the literal ranges may open code, math or HTML that
-	// reaches into the tail.
-	let outside = "";
-	let at = 0;
-	for (const [start, end] of read.literal) {
-		outside += line.slice(at, start);
-		at = end;
+	if (open >= 0 && UNFINISHED_PILL.test(line.slice(open)) && UNESCAPED_AT(line, open)) candidates.push(open);
+	else if (line.endsWith("[") && !line.endsWith("[[") && UNESCAPED_AT(line, line.length - 1)) candidates.push(line.length - 1);
+	const bold = openBold(line, read.literal);
+	if (bold >= 0) candidates.push(bold);
+	let cut = -1;
+	for (const at of candidates) {
+		if (read.literal.some(([, e]) => e > at) || LITERAL_SIGN.test(line.slice(at)) || mayOpenLiteral(line, read.literal, at)) continue;
+		if (cut < 0 || at < cut) cut = at;
 	}
-	return MAY_BE_LITERAL.test(outside + line.slice(at)) ? -1 : cut;
+	return cut;
+}
+
+/**
+ * Whether text of line before index `until`, outside the literal ranges, may open literal text that reaches
+ * past it: an unclosed backtick, a "<" with no ">" after it, a "$" before a character other than a digit
+ * (the drawing escapes those), or "\\(" and "\\[" (pi's inline math). An escaped character opens nothing.
+ */
+function mayOpenLiteral(line: string, literal: Range[], until: number): boolean {
+	let r = 0;
+	for (let i = 0; i < until; i++) {
+		while (r < literal.length && literal[r][1] <= i) r++;
+		if (r < literal.length && literal[r][0] <= i) {
+			i = literal[r][1] - 1;
+			continue;
+		}
+		const c = line[i];
+		if (c === "\\") {
+			if (line[i + 1] === "(" || line[i + 1] === "[") return true;
+			i++;
+		} else if (c === "\x60") return true;
+		// A "$" at the line end is undecided: what follows decides.
+		else if (c === "$" && i + 1 < line.length && !/\d/.test(line[i + 1])) return true;
+		else if (c === "<" && !line.slice(i + 1, until).includes(">")) return true;
+	}
+	return false;
+}
+
+/**
+ * The index of the last opening bold marker of line that nothing on the line closes, -1 for none: a run of
+ * two "*" or "_" that is left-flanking and not right-flanking (CommonMark), outside literal ranges and complete
+ * pills; or a run of one or two at the line end after a space or at the line start, which may still open bold.
+ * A closing run never waits (it may close bold an earlier line opened), and neither does a run between spaces.
+ * The bold may hold at most HOLD_LABEL characters, a first closing star or underscore not counted.
+ */
+function openBold(line: string, literal: Range[]): number {
+	const pills: Range[] = [];
+	if (line.includes("[[")) for (const m of line.matchAll(COMPLETE_PILL)) pills.push([m.index, m.index + m[0].length]);
+	let open = -1;
+	let r = 0;
+	let k = 0;
+	for (let i = 0; i < line.length; ) {
+		const c = line[i];
+		if (c !== "*" && c !== "_") {
+			i++;
+			continue;
+		}
+		let j = i;
+		while (line[j] === c) j++;
+		while (r < literal.length && literal[r][1] <= i) r++;
+		while (k < pills.length && pills[k][1] <= i) k++;
+		const inside = (r < literal.length && literal[r][0] <= i) || (k < pills.length && pills[k][0] <= i);
+		if (!inside && j - i <= 2 && UNESCAPED_AT(line, i)) {
+			const prev = line[i - 1];
+			const next = line[j];
+			const spaceBefore = prev === undefined || WHITESPACE.test(prev);
+			const left = next !== undefined && !WHITESPACE.test(next) && (!PUNCTUATION.test(next) || spaceBefore || PUNCTUATION.test(prev));
+			const right = !spaceBefore && (!PUNCTUATION.test(prev) || next === undefined || WHITESPACE.test(next) || PUNCTUATION.test(next));
+			if (j - i === 2 && open >= 0 && right && line[open] === c) open = -1;
+			else if (j - i === 2 && left && !right) open = i;
+			else if (next === undefined && spaceBefore && open < 0) open = i;
+		}
+		i = j;
+	}
+	if (open < 0) return -1;
+	const partialClose = line.length - open > 3 && line.endsWith(line[open]) ? 1 : 0;
+	return line.length - open - 2 - partialClose <= HOLD_LABEL ? open : -1;
 }
 
 /** A sentinel after the written lines that is not a top-level paragraph: they end inside a block a blank line does not close. */

@@ -4,22 +4,10 @@
 import { describe, expect, test } from "bun:test";
 import * as hegel from "@hegeldev/hegel";
 import * as gs from "@hegeldev/hegel/generators";
-import { Markdown, rgbColor } from "@earendil-works/pi-tui";
-import { load, type Theme } from "./seam.ts";
+import { Markdown } from "@earendil-works/pi-tui";
+import { load } from "./seam.ts";
+import { truecolor } from "./truecolor.ts";
 
-const RGB: Record<string, [number, number, number]> = {
-	success: [195, 232, 141], error: [255, 117, 127], warning: [255, 199, 119], accent: [130, 170, 255], customMessageLabel: [192, 153, 255],
-	text: [200, 211, 245], mdLink: [130, 170, 255], dim: [84, 92, 126], toolPendingBg: [26, 27, 38], selectedBg: [47, 51, 77],
-	toolSuccessBg: [30, 43, 40], toolErrorBg: [44, 32, 48], searchMatchBg: [47, 51, 77],
-};
-const fgEsc = (name: string) => "\x1b[38;2;" + RGB[name].join(";") + "m";
-const truecolor: Theme = {
-	fg: (name: never, text: string) => fgEsc(name) + text + "\x1b[39m",
-	getFgAnsi: (name: never) => fgEsc(name),
-	getBgAnsi: (name: never) => "\x1b[48;2;" + RGB[name].join(";") + "m",
-	getColorMode: () => "truecolor",
-	colors: Object.fromEntries(Object.entries(RGB).map(([name, [r, g, b]]) => [name, rgbColor(r, g, b)])),
-};
 const plain = (t: string) => t;
 const piTheme = { heading: plain, link: plain, linkUrl: plain, code: plain, codeBlock: plain, codeBlockBorder: plain, quote: plain, quoteBorder: plain, hr: plain, listBullet: plain, bold: plain, italic: plain, strikethrough: plain, underline: plain };
 const ESCAPE = /\x1b\[[0-9;]*m/g;
@@ -52,11 +40,14 @@ describe("count line at the end", () => {
 });
 
 // A reply as lines of tokens, so the test knows where each pill, bold label and heading starts and ends.
-type Kind = "word" | "pill" | "bold" | "code";
+type Kind = "word" | "pill" | "bold" | "code" | "operator";
 const token = gs.oneOf(
-	gs.sampledFrom(["alpha", "beta", "x1", "go!", "a:b", "(c)"]).map((t) => ({ kind: "word" as Kind, text: t })),
-	gs.sampledFrom(["Done", "Implement", "Shared", "Owned", "Preview", "Done 3/4"]).map((t) => ({ kind: "pill" as Kind, text: "[[" + t + "]]" })),
-	gs.sampledFrom(["Fix:", "Check:", "Result:", "Cause", "Left:"]).map((t) => ({ kind: "bold" as Kind, text: "**" + t + "**" })),
+	// Currency and escapes before a tail do not stop it from waiting.
+	gs.sampledFrom(["alpha", "beta", "x1", "go!", "a:b", "(c)", "$5", "$12.50", "\\*", "\\_x"]).map((t) => ({ kind: "word" as Kind, text: t })),
+	gs.sampledFrom(["Done", "Implement", "Shared", "Owned", "Preview", "Done 3/4", "Done **detail", "a".repeat(32)]).map((t) => ({ kind: "pill" as Kind, text: "[[" + t + "]]" })),
+	gs.sampledFrom(["**Fix:**", "**Check:**", "**Result:**", "**Cause**", "**Left:**", "__Fix:__", "**" + "b".repeat(32) + "**"]).map((t) => ({ kind: "bold" as Kind, text: t })),
+	// An operator between spaces opens no bold: it waits only while it could still be an opening marker.
+	gs.just({ kind: "operator" as Kind, text: "** 3" }),
 	gs.sampledFrom(["`[[Done]]`", "`**x`", "`a b`"]).map((t) => ({ kind: "code" as Kind, text: t })),
 );
 const line = gs.oneOf(
@@ -75,7 +66,7 @@ function build(lines: { line: { heading: boolean; lead: string; tokens: { kind: 
 		text += line.lead;
 		line.tokens.forEach((t, k) => {
 			if (k > 0) text += " ";
-			if (t.kind === "pill" || t.kind === "bold") spans.push({ start: text.length, end: text.length + t.text.length, line: false });
+			if (t.kind === "pill" || t.kind === "bold" || t.kind === "operator") spans.push({ start: text.length, end: text.length + t.text.length, line: false });
 			text += t.text;
 		});
 		if (line.heading) spans.push({ start: lineStart, end: text.length, line: true });
@@ -112,14 +103,72 @@ describe("an unfinished tail waits while streaming", () => {
 	});
 });
 
+// The icons of the action lead-ins and of one lead label, from the design tables (README "Action lead-ins").
+const ICONS: Record<string, string> = {
+	"Check:": "\uf046", "Do:": "\uf0a4", "Next:": "\uf061", "Unblock:": "\uf09c", "Left:": "\uf141", "Run:": "\uf04b", "Guard:": "\uf132", "Undo:": "\uf0e2", "See:": "\uf08e", "Cause:": "\uf0e7",
+};
 describe("an icon never ends a row alone", () => {
-	test("an action or label icon wraps with its word", () =>
+	test("an action or label icon and its word share a row", () =>
 		hegel.test((tc) => {
 			const words = tc.draw(gs.arrays(gs.sampledFrom(["a", "bb", "ccc", "dddd", "eeeee"]), { minSize: 0, maxSize: 12 }));
-			const lead = tc.draw(gs.sampledFrom(["Check:", "Do:", "Next:", "Left:", "Guard:", "Undo:", "See:", "Unblock:", "Run:"]));
+			const lead = tc.draw(gs.sampledFrom(Object.keys(ICONS)));
 			const width = tc.draw(gs.integers({ minValue: 12, maxValue: 40 }));
-			const first = tc.draw(gs.booleans());
+			// Cause: takes its icon only as a lead label, at the line start.
+			const first = lead === "Cause:" || tc.draw(gs.booleans());
 			const md = first ? "**" + lead + "** " + words.join(" ") + " step" : (words.join(" ") + " **" + lead + "** step").trim();
-			for (const row of rows(load(truecolor).draw(md), width)) expect(row).not.toMatch(/[\ue000-\uf8ff]$/u);
+			const shown = rows(load(truecolor).draw(md), width);
+			expect(shown.some((row) => row.includes(ICONS[lead] + "\u2002" + lead))).toBe(true);
+			for (const row of shown) expect(row).not.toMatch(/[\ue000-\uf8ff]$/u);
 		}));
+});
+
+// Review round 1 (a220492). Each case is rendered through pi-tui, streamed after a warm cache and on a fresh instance.
+// pi-tui's renderBlock is private: it is reached through an untyped subclass.
+const PiMarkdown = Markdown as unknown as new (...args: unknown[]) => { render(width: number): string[]; renderBlock(...args: unknown[]): unknown };
+class Track extends PiMarkdown {
+	owners: string[] = [];
+	renderBlock(block: unknown, token: { type: string; raw: string }, ...rest: unknown[]) {
+		if (token.raw.includes("Failed\u00a02")) this.owners.push(token.type);
+		return super.renderBlock(block, token, ...rest);
+	}
+}
+/** The pi token types that hold the drawn count line (its "Failed 2" pill). */
+function countOwners(drawn: string): string[] {
+	const md = new Track(drawn, 0, 0, piTheme);
+	md.render(120);
+	return md.owners;
+}
+const FIVE = "Work [[Done]] [[Done]] [[Done]] [[Failed]] [[Failed]].";
+/** A streamed frame drawn after a warm cache equals the fresh drawing; returns its rows. */
+function streamed(md: string, width = 120): string[] {
+	const warm = load(truecolor);
+	warm.draw("para\n\nold", true);
+	const out = warm.draw(md, true);
+	expect(out).toBe(load(truecolor).draw(md, true));
+	return rows(out, width);
+}
+const finished = (md: string, width = 120) => rows(load(truecolor).draw(md), width);
+
+describe("review round 1", () => {
+	for (const tail of ["<pre>\nlast", "<?pi\nlast", "<!DOCTYPE x\nlast", "<![CDATA[\nlast", "$$\nx^2", "\\[\nx^2", "```js\nlast", "<!--\nlast", "<pre>\n\nlast", "- item\n\n  ```\n  code"]) {
+		test("a reply that ends in an open block " + JSON.stringify(tail) + " keeps the count line out of it, as its own paragraph", () => {
+			expect(countOwners(load(truecolor).draw(FIVE + "\n\n" + tail))).toEqual(["paragraph"]);
+		});
+	}
+	for (const tail of ["- last", "> last", "<pre>x</pre>\n\nlast", "$$\nx^2\n$$\n\nlast", "<div>\nlast"]) {
+		test("a reply that ends in a closed block " + JSON.stringify(tail) + " takes the count line at the end", () => {
+			const drawn = load(truecolor).draw(FIVE + "\n\n" + tail);
+			expect(countOwners(drawn)).toEqual(["paragraph"]);
+			expect(drawn.split("\n").at(-1)).toContain("Failed\u00a02");
+		});
+	}
+	for (const md of ["<pre>\n[[Do", "$$\nx^2 [[Do", "<?pi\n**Fix", "<div>\n[[Do", "x $a [[Do", "a \\(x [[Do"]) {
+		test("text in an open HTML or math block, or after an open math mark, is never held: " + JSON.stringify(md), () => expect(streamed(md)).toEqual(finished(md)));
+	}
+	for (const md of ["2 ** 3 = 8", "a [[Done **detail]] ok", "**first\nlast**", "a **b** c", "x**y"]) {
+		test("a star run that opens no bold shows while streaming: " + JSON.stringify(md), () => expect(streamed(md)).toEqual(finished(md)));
+	}
+	for (const [md, shown] of [["Cost $5. [[Do", "Cost $5."], ["x \\* ok [[Do", "x \\* ok"], ["x [[" + "a".repeat(32) + "]", "x"], ["x __Fix", "x"], ["a `code` [[Do", "a `code`"], ["## C# costs $5", ""], ["x **" + "b".repeat(32) + "*", "x"]]) {
+		test("an unfinished tail waits whatever comes before it on the line: " + JSON.stringify(md), () => expect(streamed(md)).toEqual(finished(shown)));
+	}
 });

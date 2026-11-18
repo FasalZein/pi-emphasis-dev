@@ -184,8 +184,12 @@ export function readMarkdown(lines: string[]): ReadLine[] {
  * reading of lines 0..b does not depend on the lines after b, and the reading of the lines after b equals
  * the reading of those lines alone (with indexes shifted by b + 1). -1 when there is none.
  */
-export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: number } {
+export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: number; end: EndState } {
 	const read: ReadLine[] = [];
+	// The end marker of an open top-level HTML block of CommonMark types 1, 3, 4 and 5, which a blank line does
+	// not close (type 2, a comment, is read as code below). The reading of its lines is unchanged; the state
+	// only keeps finished-block boundaries out of it and tells the caller that the reply ends inside it.
+	let htmlEnd: RegExp | undefined;
 	// The furthest line any lookahead has read so far; lines.length when a lookahead ran to the reply's end.
 	let seen = 0;
 	const see = (k: number) => {
@@ -531,6 +535,7 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 	};
 
 	for (let i = 0; i < lines.length; i++) {
+		if (htmlEnd && htmlEnd.test(lines[i])) htmlEnd = undefined;
 		const { depth, indent, body, lead } = blockOf(lines[i]);
 		if (fence) {
 			// A fence in a block quote or a list item ends with its container; the line is then read anew.
@@ -580,7 +585,7 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 			// A definition gives meaning to reference links before it, so no head holds one.
 			// Lines are checked for a definition only up to a candidate boundary, each once.
 			if (clean && !definitionSeen) for (; definitionChecked < i && !definitionSeen; definitionChecked++) definitionSeen = mayDefine(lines[definitionChecked]);
-			if (clean && !definitionSeen && seen <= i && !containerMath && !mathOff && !pendingMath && !inlineCarry && !htmlParagraph && literalUntil === undefined && !discovering) boundary = i;
+			if (clean && !definitionSeen && seen <= i && !containerMath && !mathOff && !pendingMath && !inlineCarry && !htmlParagraph && literalUntil === undefined && !discovering && !htmlEnd) boundary = i;
 			continue;
 		}
 		// After a blank line, a line indented less than a list item's content ends that item.
@@ -766,7 +771,11 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 		}
 		// An empty list item holds no paragraph yet.
 		// An HTML block (such as "<div>") may also interrupt a paragraph.
-		if (content.startsWith("<")) htmlParagraph = true;
+		if (content.startsWith("<")) {
+			htmlParagraph = true;
+			const kind = plain && !lazy ? HTML_UNTIL.find(([opens]) => opens.test(content)) : undefined;
+			if (kind && !kind[1].test(content.slice(2))) htmlEnd = kind[1];
+		}
 		if (!paragraph) {
 			pendingMath = false;
 			inlineCarry = false;
@@ -780,8 +789,26 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 		const paragraphPlain = plain && !/^[<|]/.test(body);
 		push({ kind: "prose", literal: literalOf(i, true), plain: paragraphPlain }, i);
 	}
-	return { read, boundary };
+	// The reply ends where pi's parser keeps the next line in the same block: an open top-level HTML block of
+	// types 1, 3-5, or display math that pi shows as math or as written up to the reply's end.
+	const open = htmlEnd !== undefined || mathOff;
+	return { read, boundary, end: { open, literal: open || htmlParagraph || pendingMath || containerMath || literalUntil !== undefined } };
 }
+
+/** The reader's state after the last line. */
+export interface EndState {
+	/** The last line is in a block that a blank line does not close: HTML of types 1, 3-5, or display math. */
+	open: boolean;
+	/** Text at the end may be shown as written or literal: in an HTML block or paragraph, after pending math, or in a construct spanning lines. */
+	literal: boolean;
+}
+// CommonMark HTML block types 1, 3, 4 and 5 (as marked's html rule): the opening and the end marker.
+const HTML_UNTIL: [RegExp, RegExp][] = [
+	[/^<(?:pre|script|style|textarea)(?:\s|>|$)/i, /<\/(?:pre|script|style|textarea)>/i],
+	[/^<\?/, /\?>/],
+	[/^<!\[CDATA\[/, /\]\]>/],
+	[/^<![A-Za-z]/, />/],
+];
 
 /** Line k opens a display math block that pi's parser takes: closed, or pending with math in it. */
 function opensMathBlock(lines: string[], k: number, see: (k: number) => void): boolean {
