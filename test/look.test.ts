@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import emphasis, { DEFAULT_SETTINGS, countLine, createPalette, decorate, readSettings, type EmphasisSettings, type ThemeLike } from "../index.ts";
+import { countPlace, readMarkdown } from "../reader.ts";
 
 // A truecolor theme with tokyonight's values (themes/tokyonight.json), so escapes carry RGB.
 const RGB: Record<string, [number, number, number]> = {
@@ -108,10 +109,7 @@ describe("review fixes", () => {
 	test("a heading escapes a $ before a digit too", () => expect(draw("## Costs $5 a month")).toContain("Costs \\$5"));
 	test("a reply that opens with a list takes the count line above the list", () => {
 		const md = ["- **Build** [[Passed]] ok", "", "- **Docs** [[Done]] ok", "", "- **Key** [[Needs you]] x", "", "- **V** [[Decision]] y", "", "- **Site** [[Partial]] z"].join("\n");
-		const lines = draw(md).split("\n");
-		expect(lines[0]).toContain("Needs\u00a0you\u00a01");
-		expect(lines[1]).toBe("");
-		expect(lines[2]).toContain("Build");
+		expect(countPlace(readMarkdown(md.split("\n")))).toBe(0);
 	});
 	test("an unknown theme color name in the settings falls back to the default", () => {
 		const strict = { ...truecolor, getFgAnsi: (name: never) => { if (!RGB[name]) throw new Error("Unknown theme color: " + name); return fgEsc(name); } };

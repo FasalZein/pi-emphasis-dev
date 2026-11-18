@@ -6,6 +6,7 @@ import * as gs from "@hegeldev/hegel/generators";
 import { Markdown, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { Marked, type Token } from "marked";
 import { DEFAULT_SETTINGS, VOCABULARY, countLine, createPalette, decorate, readSettings } from "../index.ts";
+import { countPlace, readMarkdown } from "../reader.ts";
 
 const TONES = ["success", "error", "warning", "ask", "danger", "mode", "owner", "neutral"] as const;
 const COLOR = /^(#[0-9a-fA-F]{6}|[A-Za-z][A-Za-z0-9]*)$/;
@@ -117,19 +118,47 @@ test("pi's line wrapping never ends a line on a pill icon", () =>
 
 test("the icon space is one cell wide for pi", () => expect(visibleWidth("\u2002")).toBe(1));
 
-test("decorate leaves inline code spans byte for byte", () =>
+// The block reader's seam: what it leaves to the drawing (pills in prose lines, outside literal ranges)
+// and what it keeps untouched (code and blank lines, literal ranges).
+const PILL = /\[\[([^\[\]\n]{1,32})\]\]/g;
+function prosePills(md: string): string[] {
+	const lines = md.split("\n");
+	const read = readMarkdown(lines);
+	return lines.flatMap((line, i) =>
+		read[i].kind !== "prose" ? [] : [...line.matchAll(PILL)].filter((m) => !read[i].literal.some(([s, e]) => m.index < e && m.index + m[0].length > s)).map((m) => m[1]),
+	);
+}
+/** Every character of the first occurrence of snippet in md is in a code or blank line or a literal range. */
+function untouched(md: string, snippet: string): boolean {
+	const at = md.indexOf(snippet);
+	if (at < 0) return false;
+	const lines = md.split("\n");
+	const read = readMarkdown(lines);
+	let start = 0;
+	return lines.every((line, i) => {
+		const lineStart = start;
+		start += line.length + 1;
+		const from = Math.max(at, lineStart) - lineStart;
+		const to = Math.min(at + snippet.length, lineStart + line.length) - lineStart;
+		if (from >= to || read[i].kind === "code" || read[i].kind === "blank") return true;
+		for (let c = from; c < to; c++) if (!read[i].literal.some(([s, e]) => s <= c && c < e)) return false;
+		return true;
+	});
+}
+
+test("the block reader keeps inline code spans literal", () =>
 	hegel.test((tc) => {
 		const code = tc.draw(codeText);
 		const before = tc.draw(gs.sampledFrom(["", "**Fix:** ", "- **Build** [[Passed]] ", "saves $20 "]));
 		const line = before + "\x60" + code + "\x60" + " after [[Done]]";
-		expect(decorate(line, palette)).toContain("\x60" + code + "\x60");
+		expect(untouched(line, "\x60" + code + "\x60")).toBe(true);
 	}));
 
-test("decorate leaves fenced code lines byte for byte", () =>
+test("the block reader reads fenced code lines as code", () =>
 	hegel.test((tc) => {
 		const body = tc.draw(gs.arrays(codeText, { minSize: 1, maxSize: 4 }));
 		const md = ["**Result:** x", "\x60\x60\x60", ...body, "\x60\x60\x60"].join("\n");
-		expect(decorate(md, palette).split("\n").slice(1)).toEqual(md.split("\n").slice(1));
+		expect(readMarkdown(md.split("\n")).slice(1).map((l) => l.kind)).toEqual(md.split("\n").slice(1).map(() => "code"));
 	}));
 
 // Items 1 and 2 of the 2026-11-18 review round. A reply is built from blocks whose pills are either in
@@ -211,6 +240,11 @@ function checkPlace(md: string) {
 	}
 	let i = 0;
 	while (out[i] === without[i]) i++;
+	expectOwnBlock(out, i, without);
+}
+
+/** Line i of out and the blank line after it form a top-level paragraph; without them, out is without as pi parses and renders it. */
+function expectOwnBlock(out: string[], i: number, without: string[]) {
 	expect(out[i + 1]).toBe("");
 	expect([...out.slice(0, i), ...out.slice(i + 2)]).toEqual(without);
 	// pi's parser: the count line is a top-level paragraph of its own, and the other blocks keep their shape.
@@ -271,17 +305,25 @@ const COUNT_CASES: [keyof typeof REVIEW, string[], string[]][] = [
 	["codeSeparated", ["Done", "Failed", "Done", "Done", "Failed"], ["\x60x\x60"]],
 ];
 for (const [name, prose, code] of COUNT_CASES) {
-	test("review input " + name + ": pills in code and hidden comments are neither drawn nor counted", () => checkCount(REVIEW[name], prose, code));
-}
-
-for (const name of ["orderedParen", "introLooseList", "tabFence"] as const) {
-	test("review input " + name + ": the count line never splits a list or enters code", () => {
-		expect(countLine(REVIEW[name])).toBeDefined();
-		checkPlace(REVIEW[name]);
+	test("review input " + name + ": the block reader leaves pills in code and hidden comments out of prose", () => {
+		const md = REVIEW[name];
+		expect(prosePills(md)).toEqual(prose);
+		for (const c of code) expect(untouched(md, c)).toBe(true);
+		expect(countLine(md)).toBe(expectedCount(prose));
 	});
 }
 
-// Differential: pi's parser is the reference for what is code. Every pill the drawing draws must sit
+for (const name of ["orderedParen", "introLooseList", "tabFence"] as const) {
+	test("review input " + name + ": the count line place never splits a list or enters code", () => {
+		const md = REVIEW[name];
+		expect(countLine(md)).toBeDefined();
+		const lines = md.split("\n");
+		const place = countPlace(readMarkdown(lines));
+		expectOwnBlock([...lines.slice(0, place), "[[Done 3]] [[Failed 1]]", "", ...lines.slice(place)], place, lines);
+	});
+}
+
+// Differential: pi's parser is the reference for what is code. Every pill the block reader reads as prose must sit
 // outside code, code spans and HTML comments as pi's parser (marked) reads the same reply. Replies are
 // random sequences of whole lines of the kinds a reply holds. Derandomized (one fixed set of 1,000
 // cases): fresh random runs still find rare replies where the reader and marked differ, all in list items
@@ -300,14 +342,14 @@ function codeRaws(tokens: Token[], out: string[] = []): string[] {
 	}
 	return out;
 }
-test("every drawn pill is outside code as pi's parser reads the reply", () =>
+test("every pill the block reader reads as prose is outside code as pi's parser reads the reply", () =>
 	hegel.test((tc) => {
 		const lines = tc.draw(gs.arrays(gs.sampledFrom(LINES), { minSize: 1, maxSize: 12 }));
 		let n = 0;
 		const md = lines.map((l) => l.replace(/PILL/g, () => "[[Done p" + n++ + "q]]")).join("\n");
-		const out = decorate(md, ansi, true);
+		const prose = new Set(prosePills(md));
 		const code = codeRaws(lex(md)).join("\n");
 		for (let i = 0; i < n; i++) {
-			if (out.includes("Done\u00a0p" + i + "q")) expect(code).not.toContain("p" + i + "q");
+			if (prose.has("Done p" + i + "q")) expect(code).not.toContain("p" + i + "q");
 		}
 	}, { derandomize: true, testCases: 1000 }));

@@ -19,10 +19,11 @@ Pi Emphasis changes how an assistant reply is drawn in Pi's terminal. It never c
 - **Settings**: the optional `emphasis` block of pi's settings.json, read once per session start.
 - **Reply guidance**: the rules added to the system prompt as the `reply_style` section, in the terminal interface only.
 - **Palette**: the colors built from the current Pi theme and the settings. It is rebuilt when the theme changes.
+- **Block reader**: the part that reads a reply's Markdown lines the way pi's parser does. For each line it gives a kind (prose, heading, code or blank), the literal ranges (inline code, HTML comments) and whether the line is plain top-level text. It also gives the place of the count line. The drawing and the count line both use it, so a pill is counted exactly when it is drawn.
 
 ## Rules and where each lives
 
-All rules live in `index.ts` and are tested in `test/` without Pi running: `emphasis.test.ts` (words, pills, labels), `look.test.ts` (colors, edges, icons, count line, settings), `reply-style.test.ts` (the prompt section and its words) and `properties.test.ts` (Hegel property tests).
+All rules live in `index.ts` and `reader.ts` and are tested in `test/` without Pi running: `emphasis.test.ts` (words, pills, labels), `look.test.ts` (colors, edges, icons, count line, settings), `reply-style.test.ts` (the prompt section and its words) and `properties.test.ts` (Hegel property tests).
 
 - Which tone a word has, and which words exist: `VOCABULARY` (`core` are the defining words, `also` are accepted too), read by `toneOf`.
 - Which icon a pill word has: `WORD_ICON` gives its group, `ICON_SETS` gives the group's glyph.
@@ -31,10 +32,10 @@ All rules live in `index.ts` and are tested in `test/` without Pi running: `emph
 - Which lead-in words take an icon after a pill: `ACTION_ICONS`.
 - What the settings may hold and their defaults: `readSettings` and `DEFAULT_SETTINGS`; the README section "Settings" describes them for people.
 - How a tone becomes escapes: `createPalette` (`PANEL_MIX`, the contrast pick for solid pills, the 256-color fallback).
-- When and where the count line appears: `tally`, `countPlace` and `COUNT_LINE_MIN`; `countLine` gives it for a reply.
+- When and where the count line appears: `tally`, `countPlace` (in `reader.ts`) and `COUNT_LINE_MIN`; `countLine` gives it for a reply.
 - What the agent is told: `REPLY_STYLE`, fixed text; `test/reply-style.test.ts` checks that each word it names is in the tables above.
 - How a pill label splits into icon, word and detail: `splitLabel`.
-- What is prose and what stays untouched (code in any container, inline code, HTML comments, escaped markers): `readMarkdown`, shared by the drawing (`drawProse`, `drawHeading`) and the count line.
+- What is prose and what stays untouched (code in any container, inline code, HTML comments, escaped markers): the block reader, `readMarkdown` in `reader.ts`, shared by the drawing (`drawProse`, `drawHeading`) and the count line.
 
 ## Border
 
