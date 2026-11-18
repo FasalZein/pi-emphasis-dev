@@ -190,6 +190,12 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 	// not close (type 2, a comment, is read as code below). The reading of its lines is unchanged; the state
 	// only keeps finished-block boundaries out of it and tells the caller that the reply ends inside it.
 	let htmlEnd: RegExp | undefined;
+	// The line that closed the last HTML block of types 1, 3-5 of the open paragraph; -1 when an HTML line of
+	// another type came after it. Lines after it are a new pi block: only the end state reads it.
+	let htmlClosedAt = -1;
+	// The open paragraph is an HTML block of type 6 (such as "<div>"), which ends at a blank line: an opener or
+	// a math mark in it is HTML text.
+	let htmlFlow = false;
 	// The furthest line any lookahead has read so far; lines.length when a lookahead ran to the reply's end.
 	let seen = 0;
 	const see = (k: number) => {
@@ -410,7 +416,7 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 			}
 			if (c === "\\" || c === "$") {
 				// Only pending math (no closing mark on the line) may make pi show the rest as written.
-				if (inContainer && !containerMath && (c === "$" || text[p + 1] === "(" || text[p + 1] === "[") && inlineMathEnd(text, p) === PENDING) containerMath = true;
+				if (inContainer && !containerMath && !htmlParagraph && (c === "$" || text[p + 1] === "(" || text[p + 1] === "[") && inlineMathEnd(text, p) === PENDING) containerMath = true;
 				// pi shows inline math (pi-tui's latex extension) as math: its pills stay literal.
 				let math = mathOff || pendingMath || htmlParagraph || inContainer || unsure ? -1 : inlineMathEnd(text, p);
 				if (math !== -1 && (opens.length > 0 || target > 0 || stars % 2 || unders % 2 || tildes % 2 || tag || inUrl(p))) {
@@ -535,7 +541,13 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 	};
 
 	for (let i = 0; i < lines.length; i++) {
-		if (htmlEnd && htmlEnd.test(lines[i])) htmlEnd = undefined;
+		// Only the end marker of the opening line closes the block: an opener on a line inside it, or on its
+		// closing line, starts nothing (CommonMark: one HTML block ends at the first line with its end marker).
+		const inHtml = htmlEnd !== undefined || htmlFlow;
+		if (htmlEnd && htmlEnd.test(lines[i])) {
+			htmlEnd = undefined;
+			htmlClosedAt = i;
+		}
 		const { depth, indent, body, lead } = blockOf(lines[i]);
 		if (fence) {
 			// A fence in a block quote or a list item ends with its container; the line is then read anew.
@@ -574,12 +586,14 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 			listColumns.length = 0;
 		}
 		if (!lazy) previousDepth = depth;
-		if (!body.trim()) {
+		// In an open HTML block only an empty line is blank: a lone ">" there is HTML text.
+		if (!body.trim() && !(inHtml && lines[i].trim())) {
 			// A list item that opens empty ends at a blank line.
 			if (emptyItem) listColumns.pop();
 			emptyItem = false;
 			paragraph = false;
 			htmlParagraph = false;
+			htmlFlow = false;
 			push({ kind: "blank", literal: [], plain: false }, i);
 			const clean = !fence && indentedBase === undefined && !paragraph && !emptyItem && previousDepth === 0 && listColumns.length === 0;
 			// A definition gives meaning to reference links before it, so no head holds one.
@@ -678,7 +692,8 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 		// pi shows a closed display math block as math, so its pills stay literal. An unclosed one pi shows as
 		// written (or, without math in it, reads as a paragraph); the reader then reads on as usual.
 		// A lazy line continues the paragraph before it (in a quote or a list item) and opens no block.
-		const mathMark = (content[0] === "$" || content[0] === "\\") && MATH_MARKS.some((m) => m.open.test(content));
+		// In an open HTML block (types 1, 3-6) a math mark is HTML text: it changes no state.
+		const mathMark = !inHtml && (content[0] === "$" || content[0] === "\\") && MATH_MARKS.some((m) => m.open.test(content));
 		// After a code line (which may be a lazy line pi reads as text) the reader takes no math block.
 		const topLevel = () => depth + innerDepth === 0 && !marker && listColumns.length === 0 && (!paragraph || topParagraph) && (read[i - 1]?.kind !== "code" || blockEnd === i - 1);
 		const mathEnd: number = mathMark && topLevel() && !mathOff && !htmlParagraph && !lazy && indent <= 3 ? mathBlockEnd(lines, i, content) : -1;
@@ -773,8 +788,13 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 		// An HTML block (such as "<div>") may also interrupt a paragraph.
 		if (content.startsWith("<")) {
 			htmlParagraph = true;
-			const kind = plain && !lazy ? HTML_UNTIL.find(([opens]) => opens.test(content)) : undefined;
+			const kind = plain && !lazy && !inHtml ? HTML_UNTIL.find(([opens]) => opens.test(content)) : undefined;
 			if (kind && !kind[1].test(content.slice(2))) htmlEnd = kind[1];
+			else if (kind) htmlClosedAt = i;
+			else if (!inHtml) {
+				htmlClosedAt = -1;
+				htmlFlow = plain && !lazy && HTML_FLOW.test(content);
+			}
 		}
 		if (!paragraph) {
 			pendingMath = false;
@@ -792,7 +812,9 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 	// The reply ends where pi's parser keeps the next line in the same block: an open top-level HTML block of
 	// types 1, 3-5, or display math that pi shows as math or as written up to the reply's end.
 	const open = htmlEnd !== undefined || mathOff;
-	return { read, boundary, end: { open, literal: open || htmlParagraph || pendingMath || containerMath || literalUntil !== undefined } };
+	// After the closing line of an HTML block of types 1, 3-5 pi starts a new block: the text there is not HTML.
+	const htmlText = htmlParagraph && !(htmlClosedAt >= 0 && htmlClosedAt < lines.length - 1);
+	return { read, boundary, end: { open, literal: open || htmlText || pendingMath || containerMath || literalUntil !== undefined } };
 }
 
 /** The reader's state after the last line. */
@@ -809,6 +831,9 @@ const HTML_UNTIL: [RegExp, RegExp][] = [
 	[/^<!\[CDATA\[/, /\]\]>/],
 	[/^<![A-Za-z]/, />/],
 ];
+
+// CommonMark HTML block type 6 (marked's tag list): it ends at a blank line and may interrupt a paragraph.
+const HTML_FLOW = /^<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:\s|\/?>|$)/i;
 
 /** Line k opens a display math block that pi's parser takes: closed, or pending with math in it. */
 function opensMathBlock(lines: string[], k: number, see: (k: number) => void): boolean {
