@@ -7,6 +7,9 @@ const theme = {
 	fg: (color: string, text: string) => `<${color}>${text}</>`,
 	getFgAnsi: (color: string) => `\x1b[38;fg-${color}m`,
 	getBgAnsi: (color: string) => `\x1b[48;bg-${color}m`,
+	// Tags carry no color: pills take the path for themes without panel colors.
+	getColorMode: () => "truecolor",
+	colors: {},
 };
 const ext = load(theme);
 const plain = (text: string) => ext.draw(text).replace(/\x1b\[[0-9;a-zA-Z-]*m/g, "").replace(/[\ue0b4\ue0b6]/g, "|").replace(/[\u00a0\u2002]/g, " ");

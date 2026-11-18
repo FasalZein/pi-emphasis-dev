@@ -19,7 +19,8 @@
 //     first paragraph.
 //   - The PI_EMPHASIS_* environment switches are gone. An optional "emphasis" block in pi's
 //     settings.json sets edges, icons, label color, tone colors and fill (readSettings()).
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, Theme, ThemeBg, ThemeColor, ThemeToken } from "@earendil-works/pi-coding-agent";
+import { backgroundAnsi, type Color, colorToRgb, foregroundAnsi, mixColors, parseColor, type RgbColorValue, rgbColor } from "@earendil-works/pi-tui";
 import { countPlace, readMarkdown, type Range } from "./reader.ts";
 
 type Colorize = (text: string) => string;
@@ -92,14 +93,6 @@ interface Palette {
 	edges?: Edges;
 	/** The glyph of each icon group; undefined draws no icons. */
 	icons?: Record<string, string>;
-}
-
-/** Minimal slice of Pi's Theme used to build a palette. */
-interface ThemeLike {
-	fg(color: never, text: string): string;
-	getFgAnsi(color: never): string;
-	getBgAnsi(color: never): string;
-	getColorMode?(): string;
 }
 
 /** Each tone's words. `core` are the words the tones were defined with; `also` are accepted and colored the same. */
@@ -194,53 +187,39 @@ function toneOf(label: string): PillTone {
 	return "neutral";
 }
 
-/** A background escape turned into the same color as a foreground, for pill caps. */
-function bgToFg(bg: string): string {
-	return bg.replace(/\x1b\[48;/g, "\x1b[38;").replace(/\x1b\[(4|10)([0-7])m/g, (_, p: string, n: string) => "\x1b[" + (p === "4" ? "3" : "9") + n + "m");
-}
-
-type RGB = [number, number, number];
-const rgbOf = (ansi: string): RGB | undefined => {
-	const m = ansi.match(/\x1b\[(?:38|48);2;(\d+);(\d+);(\d+)m/);
-	return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : undefined;
-};
-const hexRgb = (hex: string): RGB => [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16)) as RGB;
 /** The share of the tone color in a panel's background; the rest is the theme's toolPendingBg. */
 const PANEL_MIX = 0.22;
-const mix = (a: RGB, b: RGB, t: number): RGB => [0, 1, 2].map((i) => Math.round(a[i] * t + b[i] * (1 - t))) as RGB;
-const fgRgb = (c: RGB) => "\x1b[38;2;" + c.join(";") + "m";
-const bgRgb = (c: RGB) => "\x1b[48;2;" + c.join(";") + "m";
 /** WCAG relative luminance and contrast ratio, to pick readable text on a solid pill. */
-const luminance = (c: RGB) => {
-	const [r, g, b] = c.map((v) => {
+const luminance = (c: RgbColorValue) => {
+	const [r, g, b] = [c.r, c.g, c.b].map((v) => {
 		const s = v / 255;
 		return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
 	});
 	return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 };
-const contrast = (a: RGB, b: RGB) => {
+const contrast = (a: RgbColorValue, b: RgbColorValue) => {
 	const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p);
 	return (x + 0.05) / (y + 0.05);
 };
-/** The index of the xterm-256 color cube nearest to a color, for hex colors in a 256-color terminal. */
-function xterm256(c: RGB): number {
-	const steps = [0, 95, 135, 175, 215, 255];
-	const near = (v: number) => steps.reduce((best, s, i) => (Math.abs(s - v) < Math.abs(steps[best] - v) ? i : best), 0);
-	const [r, g, b] = c.map(near);
-	return 16 + 36 * r + 6 * g + b;
-}
+/** A color as whole sRGB channels, the values pi writes into a truecolor escape. */
+const whole = (c: Color): RgbColorValue => {
+	const { r, g, b } = colorToRgb(c);
+	return rgbColor(Math.round(r), Math.round(g), Math.round(b));
+};
 
 // Tool backgrounds for terminals without truecolor, as upstream drew them.
-const LEGACY_BG: Record<PillTone, string> = {
+const LEGACY_BG: Record<PillTone, ThemeBg> = {
 	success: "toolSuccessBg", error: "toolErrorBg", warning: "searchMatchBg", ask: "searchMatchBg", danger: "toolErrorBg", mode: "selectedBg", owner: "selectedBg", neutral: "selectedBg",
 };
 
-function createPalette(theme: ThemeLike, settings: EmphasisSettings = DEFAULT_SETTINGS): Palette {
-	const truecolor = !theme.getColorMode || theme.getColorMode() === "truecolor";
+function createPalette(theme: Theme, settings: EmphasisSettings = DEFAULT_SETTINGS): Palette {
+	const mode = theme.getColorMode();
+	const truecolor = mode === "truecolor";
+	const colors = theme.colors;
 	// Pi's theme throws on a color name it does not know ("teal"); such a setting falls back to its default.
 	const known = (name: string) => {
 		try {
-			theme.getFgAnsi(name as never);
+			theme.getFgAnsi(name as ThemeColor);
 			return true;
 		} catch {
 			return false;
@@ -252,13 +231,30 @@ function createPalette(theme: ThemeLike, settings: EmphasisSettings = DEFAULT_SE
 		labels: valid(settings.labels, DEFAULT_SETTINGS.labels),
 		colors: Object.fromEntries(TONES.map((t) => [t, valid(settings.colors[t], DEFAULT_SETTINGS.colors[t])])) as Record<PillTone, string>,
 	};
-	const fg = (name: string) => (text: string) => theme.fg(name as never, text);
-	const fgOf = (spec: string) =>
-		!spec.startsWith("#") ? theme.getFgAnsi(spec as never) : truecolor ? fgRgb(hexRgb(spec)) : "\x1b[38;5;" + xterm256(hexRgb(spec)) + "m";
-	/** A color spec as RGB, when the terminal draws truecolor and the theme gives one. */
-	const rgb = (spec: string): RGB | undefined => (!truecolor ? undefined : spec.startsWith("#") ? hexRgb(spec) : rgbOf(theme.getFgAnsi(spec as never)));
-	const base = rgbOf(theme.getBgAnsi("toolPendingBg" as never));
-	const text = rgbOf(theme.getFgAnsi("text" as never));
+	const fg = (name: string) => (text: string) => theme.fg(name as ThemeColor, text);
+	const fgOf = (spec: string) => (spec.startsWith("#") ? foregroundAnsi(parseColor(spec), mode) : theme.getFgAnsi(spec as ThemeColor));
+	/**
+	 * The theme's own color of a token in its slot. A token set to "" draws the terminal default; theme.colors
+	 * still gives it a guessed color, so the token's escape decides: it must be the escape of that color.
+	 */
+	const ownColor = (token: string, slot: "fg" | "bg"): Color | undefined => {
+		const c = colors[token as ThemeToken];
+		if (!c) return undefined;
+		return slot === "fg"
+			? theme.getFgAnsi(token as ThemeColor).startsWith(foregroundAnsi(c, mode)) ? c : undefined
+			: theme.getBgAnsi(token as ThemeBg).startsWith(backgroundAnsi(c, mode)) ? c : undefined;
+	};
+	/**
+	 * A color spec as RGB, when the terminal draws truecolor and the theme gives one. An indexed theme color
+	 * has no RGB of its own (the terminal's palette decides), so it takes the path without RGB.
+	 */
+	const rgb = (spec: string, slot: "fg" | "bg" = "fg"): RgbColorValue | undefined => {
+		if (!truecolor) return undefined;
+		const c = spec.startsWith("#") ? parseColor(spec) : ownColor(spec, slot);
+		return c && c.kind !== "indexed" ? whole(c) : undefined;
+	};
+	const base = rgb("toolPendingBg", "bg");
+	const text = rgb("text");
 
 	const style = (tone: PillTone): PillStyle => {
 		const spec = settings.colors[tone];
@@ -268,19 +264,19 @@ function createPalette(theme: ThemeLike, settings: EmphasisSettings = DEFAULT_SE
 		if (c && base) {
 			if (fill === "solid") {
 				const ink = text && contrast(text, c) > contrast(base, c) ? text : base;
-				return { label: bgRgb(c) + fgRgb(ink), cap: fgRgb(c) };
+				return { label: backgroundAnsi(c, mode) + foregroundAnsi(ink, mode), cap: foregroundAnsi(c, mode) };
 			}
-			const p = mix(c, base, PANEL_MIX);
-			return { label: bgRgb(p) + fgRgb(c), cap: fgRgb(p) };
+			const p = mixColors(base, c, PANEL_MIX, "srgb");
+			return { label: backgroundAnsi(p, mode) + foregroundAnsi(c, mode), cap: foregroundAnsi(p, mode) };
 		}
 		// No RGB (a 256-color terminal, or a theme without panel colors): solid pills, and panels in
 		// a theme without its own panel colors, draw in reverse video with the tone's color as background.
-		const bgAnsi = theme.getBgAnsi(LEGACY_BG[tone] as never);
-		if (fill === "solid" || !bgAnsi || /^\x1b\[49m$/.test(bgAnsi)) {
+		const legacy = ownColor(LEGACY_BG[tone], "bg");
+		if (fill === "solid" || !legacy) {
 			const f = fgOf(tone === "neutral" && spec === "text" ? "accent" : spec);
 			return { label: f + "\x1b[7m", cap: f };
 		}
-		return { label: bgAnsi + fgOf(spec), cap: bgToFg(bgAnsi) };
+		return { label: theme.getBgAnsi(LEGACY_BG[tone]) + fgOf(spec), cap: foregroundAnsi(legacy, mode) };
 	};
 	return {
 		bold: settings.labels.startsWith("#") ? (t: string) => fgOf(settings.labels) + t + "\x1b[39m" : fg(settings.labels),
@@ -519,30 +515,14 @@ const REPLY_STYLE = `The terminal draws [[Word]] as a colored pill and gives a b
 - After a pill, the step that resolves it, led by a bold Do:, Check:, Next:, Unblock:, Left:, Guard:, Undo: or See:.
 - Costs money and Destructive: once, before an action that waits for approval. Mention a cost only there, or when it passes the approved amount.`;
 
-/** The escapes a palette is built from, as one string: equal keys build equal palettes. */
-function themeKey(theme: ThemeLike, settings: EmphasisSettings): string {
-	const names = [...new Set(["success", "error", "accent", "dim", "text", settings.labels, ...Object.values(DEFAULT_SETTINGS.colors), ...Object.values(settings.colors)])];
-	const read = (get: (name: never) => string, name: string) => {
-		try {
-			return get.call(theme, name as never);
-		} catch {
-			return "";
-		}
-	};
-	return [
-		theme.getColorMode?.() ?? "",
-		...names.map((n) => read(theme.getFgAnsi, n)),
-		...["toolPendingBg", ...Object.values(LEGACY_BG)].map((n) => read(theme.getBgAnsi, n)),
-	].join("|");
-}
-
 export default function emphasis(pi: ExtensionAPI) {
-	let currentTheme: (() => ThemeLike) | undefined;
+	let currentTheme: (() => Theme) | undefined;
 	let settings = DEFAULT_SETTINGS;
-	let built: { key: string; palette: Palette } | undefined;
+	/** The palette with the theme state it was built from: its colors object and its color mode. */
+	let built: { colors: Theme["colors"]; mode: string; palette: Palette } | undefined;
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
-		currentTheme = () => ctx.ui.theme as unknown as ThemeLike;
+		currentTheme = () => ctx.ui.theme;
 		// Read once per session start; /reload picks up a change.
 		settings = readSettings((pi.getSettings() as { emphasis?: unknown }).emphasis);
 		built = undefined;
@@ -556,11 +536,14 @@ export default function emphasis(pi: ExtensionAPI) {
 	pi.registerMarkdownTransformer(
 		(markdown, context) => {
 			if (!currentTheme) return markdown;
-			// Rebuild when the theme's colors change. Pi keeps one theme object and swaps what it holds when
-			// the Theme selector of /settings switches themes, so the key is the colors, not the object.
+			// Rebuild when the theme's colors change. ctx.ui.theme is one object (a proxy) whose target pi
+			// swaps when the Theme selector of /settings switches themes. Each pi Theme hands out one frozen
+			// colors object until the theme or the terminal's colors change, and its escapes and color mode
+			// are fixed, so a new colors object or mode is the cheap sign of new colors.
 			const theme = currentTheme();
-			const key = themeKey(theme, settings);
-			if (built?.key !== key) built = { key, palette: createPalette(theme, settings) };
+			const colors = theme.colors;
+			const mode = theme.getColorMode();
+			if (!built || built.colors !== colors || built.mode !== mode) built = { colors, mode, palette: createPalette(theme, settings) };
 			return decorate(markdown, built.palette, context.isStreaming === true);
 		},
 		// Assistant replies only: pi (1.5.1 and later) skips user, thinking and other Markdown.

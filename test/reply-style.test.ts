@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { indexedColor } from "@earendil-works/pi-tui";
 import { load as loadExtension, toneOf } from "./seam.ts";
 
 // The tested rules: rule set c4g of the 2026-11-18 rules round (310 tokens, DESIGN.md). Pi renders a
@@ -17,6 +18,9 @@ const theme = {
 	fg: (name: string, text: string) => `\x1b[38;5;${name.length}m${text}\x1b[39m`,
 	getFgAnsi: (name: string) => `\x1b[38;5;${name.length}m`,
 	getBgAnsi: (name: string) => `\x1b[48;5;${name.length + 100}m`,
+	getColorMode: () => "truecolor",
+	// The indexed color each name's background escape draws.
+	colors: new Proxy({}, { get: (_, name) => indexedColor(String(name).length + 100) }),
 };
 
 // The real entry in a stand-in pi (test/seam.ts), with pi's settings.json content.

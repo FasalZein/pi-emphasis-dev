@@ -3,7 +3,7 @@
 import { expect, test } from "bun:test";
 import * as hegel from "@hegeldev/hegel";
 import * as gs from "@hegeldev/hegel/generators";
-import { Markdown, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { indexedColor, Markdown, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { Marked, type Token } from "marked";
 import { DEFAULT_SETTINGS, VOCABULARY, readSettings } from "../index.ts";
 import { countPlace, readMarkdown } from "../reader.ts";
@@ -49,6 +49,9 @@ const theme = {
 	fg: (c: string, t: string) => "<" + c + ">" + t + "</>",
 	getFgAnsi: (c: string) => "\x1b[38;fg-" + c + "m",
 	getBgAnsi: (c: string) => "\x1b[48;bg-" + c + "m",
+	// Tags carry no color: pills take the path for themes without panel colors.
+	getColorMode: () => "truecolor",
+	colors: {},
 };
 const ext = load(theme);
 
@@ -95,6 +98,8 @@ test("an unknown theme color name never stops the drawing and falls back to the 
 			fg: (c: string, t: string) => { if (!known.has(c)) throw new Error("Unknown theme color: " + c); return "<" + c + ">" + t + "</>"; },
 			getFgAnsi: (c: string) => { if (!known.has(c)) throw new Error("Unknown theme color: " + c); return "\x1b[38;fg-" + c + "m"; },
 			getBgAnsi: (c: string) => "\x1b[48;bg-" + c + "m",
+			getColorMode: () => "truecolor",
+			colors: {},
 		};
 		const name = tc.draw(gs.oneOf(gs.sampledFrom([...known]), gs.text({ alphabet: "abcteal", minSize: 1, maxSize: 8 })));
 		const tone = tc.draw(gs.sampledFrom(["success", "error", "warning", "ask", "danger", "mode", "owner", "neutral"] as const));
@@ -171,6 +176,8 @@ const ansiTheme = {
 	getFgAnsi: (c: string) => "\x1b[38;5;" + (c.length % 200) + "m",
 	getBgAnsi: (c: string) => "\x1b[48;5;" + (c.length % 200) + "m",
 	getColorMode: () => "256color",
+	// The indexed color of each name, the one its escapes draw.
+	colors: new Proxy({}, { get: (_, name) => indexedColor(String(name).length % 200) }),
 };
 const ansi = load(ansiTheme);
 const PILL_END = /\x1b\[22;27m/g;

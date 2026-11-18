@@ -31,7 +31,7 @@ All rules live in `index.ts` and `reader.ts` and are tested in `test/` without P
 - Which labels take an icon: `LABEL_ICONS`, applied by `withLabelIcon`.
 - Which lead-in words take an icon after a pill: `ACTION_ICONS`.
 - What the settings may hold and their defaults: `readSettings` and `DEFAULT_SETTINGS`; the README section "Settings" describes them for people.
-- How a tone becomes escapes: `createPalette` (`PANEL_MIX`, the contrast pick for solid pills, the 256-color fallback).
+- How a tone becomes escapes: `createPalette` reads concrete colors from pi's `theme.colors` and lets pi-tui write the escapes for the color mode; its own rules are `PANEL_MIX`, the contrast pick for solid pills and the fallback without RGB (256 colors, or a theme without panel colors).
 - When and where the count line appears: `tally`, `countPlace` (in `reader.ts`) and `COUNT_LINE_MIN`.
 - What the agent is told: `REPLY_STYLE`, fixed text; `test/reply-style.test.ts` checks that each word it names is in the tables above.
 - How a pill label splits into icon, word and detail: `splitLabel`.

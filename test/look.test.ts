@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { rgbColor } from "@earendil-works/pi-tui";
 import { DEFAULT_SETTINGS, readSettings } from "../index.ts";
 import { countPlace, readMarkdown } from "../reader.ts";
 import { countLineOf, countWords, load, type Theme } from "./seam.ts";
@@ -15,6 +16,7 @@ const truecolor: Theme = {
 	getFgAnsi: (name: never) => fgEsc(name),
 	getBgAnsi: (name: never) => "\x1b[48;2;" + RGB[name].join(";") + "m",
 	getColorMode: () => "truecolor",
+	colors: Object.fromEntries(Object.entries(RGB).map(([name, [r, g, b]]) => [name, rgbColor(r, g, b)])),
 };
 const draw = (md: string, settings: Partial<ReturnType<typeof readSettings>> = {}, streaming = false) =>
 	load(truecolor, { ...DEFAULT_SETTINGS, ...settings }).draw(md, streaming);
@@ -52,6 +54,12 @@ describe("pill colors from the theme", () => {
 		const settings = { ...DEFAULT_SETTINGS, colors: { ...DEFAULT_SETTINGS.colors, error: "#ff0000" } };
 		// #ff0000 is xterm-256 color 196.
 		expect(load(t256, settings).draw("[[Failed]]")).toContain("\x1b[38;5;196m");
+	});
+	test("a 256-color terminal maps a gray hex color to the gray ramp, as pi does", () => {
+		const t256 = { ...truecolor, getColorMode: () => "256color" };
+		const settings = { ...DEFAULT_SETTINGS, colors: { ...DEFAULT_SETTINGS.colors, error: "#808080" } };
+		// xterm-256 color 244 is the gray (128,128,128); the nearest cube color, 102, is (135,135,135).
+		expect(load(t256, settings).draw("[[Failed]]")).toContain("\x1b[38;5;244m");
 	});
 });
 
@@ -154,7 +162,11 @@ describe("readSettings", () => {
 describe("theme switch", () => {
 	// Pi keeps one theme object and swaps what it holds when /settings selects another theme.
 	test("after a theme change the next draw uses the new theme's pill colors", () => {
-		const other: Theme = { ...truecolor, getFgAnsi: (name: never) => (name === "success" ? "\x1b[38;2;1;200;3m" : fgEsc(name)) };
+		const other: Theme = {
+			...truecolor,
+			getFgAnsi: (name: never) => (name === "success" ? "\x1b[38;2;1;200;3m" : fgEsc(name)),
+			colors: { ...truecolor.colors, success: rgbColor(1, 200, 3) },
+		};
 		let current = truecolor;
 		const proxy = new Proxy({}, { get: (_, key) => (current as unknown as Record<string | symbol, unknown>)[key] }) as Theme;
 		const switched = load(proxy);
@@ -163,6 +175,25 @@ describe("theme switch", () => {
 		current = other;
 		expect(switched.draw("[[Done]]")).toBe(load(other).draw("[[Done]]"));
 		expect(switched.draw("[[Done]]")).toContain("\x1b[38;2;1;200;3m");
+	});
+	test("new colors inside the same theme object rebuild the pill colors", () => {
+		// What a pi Theme does when its colors change: it hands out a new frozen colors object.
+		const theme: Theme = { ...truecolor };
+		const ext = load(theme);
+		expect(ext.draw("[[Done]]")).toContain("\x1b[38;2;195;232;141m");
+		theme.getFgAnsi = (name: never) => (name === "success" ? "\x1b[38;2;1;200;3m" : fgEsc(name));
+		theme.colors = Object.freeze({ ...truecolor.colors, success: rgbColor(1, 200, 3) });
+		const out = ext.draw("[[Done]]");
+		expect(out).toContain("\x1b[38;2;1;200;3m");
+		expect(out).not.toContain("\x1b[38;2;195;232;141m");
+	});
+	test("a new color mode inside the same theme object rebuilds the pill colors", () => {
+		const theme: Theme = { ...truecolor };
+		const ext = load(theme);
+		expect(ext.draw("[[Done]]")).toMatch(/\x1b\[48;2;/);
+		theme.getColorMode = () => "256color";
+		// 256 colors: no RGB panel, the tone color on the theme's tool background.
+		expect(ext.draw("[[Done]]")).not.toMatch(/\x1b\[48;2;63;72;61m/);
 	});
 });
 

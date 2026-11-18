@@ -1,5 +1,6 @@
 // The extension's seam for tests: the default export, loaded into a stand-in pi. The other seam is
 // reader.ts (readMarkdown, countPlace), which tests import directly.
+import type { Color } from "@earendil-works/pi-tui";
 import register from "../index.ts";
 
 /** The slice of pi's Theme the extension reads. */
@@ -7,7 +8,9 @@ export interface Theme {
 	fg(color: never, text: string): string;
 	getFgAnsi(color: never): string;
 	getBgAnsi(color: never): string;
-	getColorMode?(): string;
+	getColorMode(): string;
+	/** Concrete colors per token; pi hands out a new object when the theme's colors change. */
+	colors: Readonly<Record<string, Color>>;
 }
 type Handler = (event: unknown, ctx?: unknown) => void;
 type Transformer = (markdown: string, context: { messageType: string; isStreaming?: boolean }) => string;
@@ -87,6 +90,8 @@ const toneTheme = {
 	fg: (_: string, text: string) => text,
 	getFgAnsi: (name: string) => "\x1b[38;tone-" + name + "m",
 	getBgAnsi: (name: string) => "\x1b[48;" + name + "m",
+	getColorMode: () => "truecolor",
+	colors: {},
 };
 const toneExt = load(toneTheme, {
 	colors: Object.fromEntries(TONES.map((t) => [t, "is" + t])),

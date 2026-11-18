@@ -19,7 +19,7 @@ Tokens:
 - Tones: success (theme success), error (theme error), warning (theme warning), ask (theme warning), danger (theme error), mode (theme accent), owner (theme customMessageLabel), neutral (theme selectedBg + text).
 - Panel fill: the tone color mixed 22% into the theme's toolPendingBg; label in the tone color, bold. Solid fill: the tone color as background; label in whichever of toolPendingBg or text contrasts more with it.
 - Default fill: panel for every tone, solid for ask and danger.
-- 256-color terminals: theme tokens as before (panel = the tone's tool background, solid = reverse video); hex colors map to the nearest xterm-256 color.
+- 256-color terminals: theme tokens as before (panel = the tone's tool background, solid = reverse video); hex colors map to a 256 color as pi maps theme colors (pi-tui `foregroundAnsi`: the xterm cube or the gray ramp, whichever is nearer).
 - Pills next to each other are separated by two spaces.
 Type: the terminal's font; the extension cannot change size or face. Icons are Nerd Font Material Design glyphs that all measure 599x600 units in a Nerd Font Mono cell, centred on the cap height.
 Layout: inline. The count line sits after the first paragraph, as its own paragraph.
