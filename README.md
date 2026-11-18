@@ -255,7 +255,7 @@ By default, `ask` and `danger` are `solid` and the other tones are `panel`. That
 
 - **Panel.** The panel background is 22% of the tone color mixed with 78% of the theme color `toolPendingBg`. A pi theme has no color for the terminal background, and `toolPendingBg` is the nearest: in tokyonight it is the background color.
 - **Solid.** The extension measures the contrast ratio (WCAG) of the theme colors `text` and `toolPendingBg` against the tone color, and uses the one with the higher ratio for the word.
-- **Terminals without truecolor.** Panels use the theme's tool backgrounds, as upstream did, and solid pills use reverse video. A hex color maps to a 256 color the way pi maps its theme colors: the nearest color of the xterm color cube or of the gray ramp.
+- **Terminals without truecolor.** Panels use the theme's tool backgrounds, as upstream did, and solid pills use reverse video. A hex color maps to a 256 color the way pi maps its theme colors (pi-tui chooses the index from the xterm color cube and, for near-gray colors, the gray ramp).
 
 ### What has no setting
 

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { Theme as PiTheme } from "@earendil-works/pi-coding-agent";
 import { rgbColor } from "@earendil-works/pi-tui";
+import { THEME_TOKENS } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme-tokens.js";
 import { DEFAULT_SETTINGS, readSettings } from "../index.ts";
 import { countPlace, readMarkdown } from "../reader.ts";
 import { countLineOf, countWords, load, type Theme } from "./seam.ts";
@@ -159,6 +161,22 @@ describe("readSettings", () => {
 	});
 });
 
+describe("faint theme colors", () => {
+	// Review round 1 on 5619523: pi's theme.colors gives a faint (dim) token an approximation mixed toward the
+	// background, while the token's escape keeps the original color plus SGR 2. Pills use the original color.
+	test("a faint RGB tone color draws its panel from the original color, as without faint", () => {
+		// Every pi token set (a Theme needs them all), then the colors the pills read.
+		const values = { ...Object.fromEntries(Object.keys(THEME_TOKENS).map((t) => [t, "#808080"])), success: "#00ff00", error: "#000080", text: "#e0e0e0",
+			toolPendingBg: "#202020", toolSuccessBg: "#202020", toolErrorBg: "#202020", selectedBg: "#202020", searchMatchBg: "#202020" };
+		const faint = new PiTheme(values as never, {} as never, "truecolor", { dim: ["success", "text"] });
+		// 0.22 * (0,255,0) + 0.78 * (32,32,32), rounded: (25,81,25); the word in the original (0,255,0).
+		expect(load(faint).draw("[[Done]]")).toContain("\x1b[48;2;25;81;25m\x1b[38;2;0;255;0m\x1b[1m");
+		// Solid on navy (0,0,128): WCAG contrast of the original text (224,224,224) is about 12.1, of (32,32,32)
+		// about 1.02, so the ink is the original text color.
+		expect(load(faint).draw("[[Destructive]]")).toContain("\x1b[48;2;0;0;128m\x1b[38;2;224;224;224m\x1b[1m");
+	});
+});
+
 describe("theme switch", () => {
 	// Pi keeps one theme object and swaps what it holds when /settings selects another theme.
 	test("after a theme change the next draw uses the new theme's pill colors", () => {
@@ -186,14 +204,6 @@ describe("theme switch", () => {
 		const out = ext.draw("[[Done]]");
 		expect(out).toContain("\x1b[38;2;1;200;3m");
 		expect(out).not.toContain("\x1b[38;2;195;232;141m");
-	});
-	test("a new color mode inside the same theme object rebuilds the pill colors", () => {
-		const theme: Theme = { ...truecolor };
-		const ext = load(theme);
-		expect(ext.draw("[[Done]]")).toMatch(/\x1b\[48;2;/);
-		theme.getColorMode = () => "256color";
-		// 256 colors: no RGB panel, the tone color on the theme's tool background.
-		expect(ext.draw("[[Done]]")).not.toMatch(/\x1b\[48;2;63;72;61m/);
 	});
 });
 

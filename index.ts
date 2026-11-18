@@ -201,6 +201,8 @@ const contrast = (a: RgbColorValue, b: RgbColorValue) => {
 	const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p);
 	return (x + 0.05) / (y + 0.05);
 };
+/** The opening truecolor escape pi-tui writes for a color (colorAnsi in pi-tui's colors.js). */
+const TRUECOLOR_ESCAPE = /^\x1b\[(?:38|48);2;(\d+);(\d+);(\d+)m/;
 /** A color as whole sRGB channels, the values pi writes into a truecolor escape. */
 const whole = (c: Color): RgbColorValue => {
 	const { r, g, b } = colorToRgb(c);
@@ -234,15 +236,17 @@ function createPalette(theme: Theme, settings: EmphasisSettings = DEFAULT_SETTIN
 	const fg = (name: string) => (text: string) => theme.fg(name as ThemeColor, text);
 	const fgOf = (spec: string) => (spec.startsWith("#") ? foregroundAnsi(parseColor(spec), mode) : theme.getFgAnsi(spec as ThemeColor));
 	/**
-	 * The theme's own color of a token in its slot. A token set to "" draws the terminal default; theme.colors
-	 * still gives it a guessed color, so the token's escape decides: it must be the escape of that color.
+	 * The color a token's own escape draws. theme.colors is that color for most tokens, but pi normalizes some:
+	 * a token set to "" (terminal default) gets a guessed color, and a faint token a mix toward the background
+	 * while its escape keeps the original color plus SGR 2. The escape decides: when theme.colors does not open
+	 * it, the color is the truecolor RGB the escape names, and none for a default or indexed escape.
 	 */
 	const ownColor = (token: string, slot: "fg" | "bg"): Color | undefined => {
+		const escape = slot === "fg" ? theme.getFgAnsi(token as ThemeColor) : theme.getBgAnsi(token as ThemeBg);
 		const c = colors[token as ThemeToken];
-		if (!c) return undefined;
-		return slot === "fg"
-			? theme.getFgAnsi(token as ThemeColor).startsWith(foregroundAnsi(c, mode)) ? c : undefined
-			: theme.getBgAnsi(token as ThemeBg).startsWith(backgroundAnsi(c, mode)) ? c : undefined;
+		if (c && escape.startsWith(slot === "fg" ? foregroundAnsi(c, mode) : backgroundAnsi(c, mode))) return c;
+		const rgb = TRUECOLOR_ESCAPE.exec(escape);
+		return rgb ? rgbColor(Number(rgb[1]), Number(rgb[2]), Number(rgb[3])) : undefined;
 	};
 	/**
 	 * A color spec as RGB, when the terminal draws truecolor and the theme gives one. An indexed theme color
@@ -518,8 +522,8 @@ const REPLY_STYLE = `The terminal draws [[Word]] as a colored pill and gives a b
 export default function emphasis(pi: ExtensionAPI) {
 	let currentTheme: (() => Theme) | undefined;
 	let settings = DEFAULT_SETTINGS;
-	/** The palette with the theme state it was built from: its colors object and its color mode. */
-	let built: { colors: Theme["colors"]; mode: string; palette: Palette } | undefined;
+	/** The palette with the colors object of the theme it was built from. */
+	let built: { colors: Theme["colors"]; palette: Palette } | undefined;
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		currentTheme = () => ctx.ui.theme;
@@ -538,12 +542,11 @@ export default function emphasis(pi: ExtensionAPI) {
 			if (!currentTheme) return markdown;
 			// Rebuild when the theme's colors change. ctx.ui.theme is one object (a proxy) whose target pi
 			// swaps when the Theme selector of /settings switches themes. Each pi Theme hands out one frozen
-			// colors object until the theme or the terminal's colors change, and its escapes and color mode
-			// are fixed, so a new colors object or mode is the cheap sign of new colors.
+			// colors object until the terminal's colors change, and its escapes and color mode are fixed at
+			// construction, so a new colors object is the cheap sign of new colors (a new theme has its own).
 			const theme = currentTheme();
 			const colors = theme.colors;
-			const mode = theme.getColorMode();
-			if (!built || built.colors !== colors || built.mode !== mode) built = { colors, mode, palette: createPalette(theme, settings) };
+			if (built?.colors !== colors) built = { colors, palette: createPalette(theme, settings) };
 			return decorate(markdown, built.palette, context.isStreaming === true);
 		},
 		// Assistant replies only: pi (1.5.1 and later) skips user, thinking and other Markdown.
