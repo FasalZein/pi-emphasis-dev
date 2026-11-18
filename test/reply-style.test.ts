@@ -72,8 +72,8 @@ describe("every word the rules teach is drawn", () => {
 	test("the label gets an icon as a line's lead label, also after a kind-of-work pill", () => {
 		const ext = load("tui");
 		// No colon: with one, a lead-in word would get its icon from the lead-in table and hide a lost label entry.
-		expect(ext.draw(`**${label}** text`)).toMatch(new RegExp(`^\\*\\*[\\s\\S]*${ICON.source} ${label}[^:]*\\*\\*`, "u"));
-		expect(ext.draw(`[[Implement]] **${label}:** text`)).toMatch(new RegExp(`${ICON.source} ${label}:`, "u"));
+		expect(ext.draw(`**${label}** text`)).toMatch(new RegExp(`^\\*\\*[\\s\\S]*${ICON.source}\u2002${label}[^:]*\\*\\*`, "u"));
+		expect(ext.draw(`[[Implement]] **${label}:** text`)).toMatch(new RegExp(`${ICON.source}\u2002${label}:`, "u"));
 	});
 
 	test("every kind of work is a mode pill with an icon", () => {
@@ -98,7 +98,7 @@ describe("every word the rules teach is drawn", () => {
 		const ext = load("tui");
 		for (const word of leadIns) {
 			const out = ext.draw(`x [[Blocked]] **${word}:** step`);
-			expect(out).toMatch(new RegExp(`${ICON.source} ${word}:`, "u"));
+			expect(out).toMatch(new RegExp(`${ICON.source}\u2002${word}:`, "u"));
 		}
 	});
 });

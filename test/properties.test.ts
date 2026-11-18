@@ -8,7 +8,7 @@ import { Marked, type Token } from "marked";
 import { DEFAULT_SETTINGS, VOCABULARY, readSettings } from "../index.ts";
 import { countPlace, readMarkdown } from "../reader.ts";
 import { piShown } from "./oracle.ts";
-import { countLineOf, countWords, load } from "./seam.ts";
+import { countLineOf, countWords, drawWithoutCount, load } from "./seam.ts";
 
 const TONES = ["success", "error", "warning", "ask", "danger", "mode", "owner", "neutral"] as const;
 const COLOR = /^(#[0-9a-fA-F]{6}|[A-Za-z][A-Za-z0-9]*)$/;
@@ -242,20 +242,26 @@ const render = (md: string) => new Markdown(md, 0, 0, piTheme).render(400).map((
 /** Item 2: the count line and its blank line come out whole; pi parses the rest as without them. */
 function checkPlace(md: string) {
 	const out = ansi.draw(md).split("\n");
-	const without = ansi.draw(md, true).split("\n");
+	const without = drawWithoutCount(ansi, md);
 	if (out.length === without.length) {
 		expect(out).toEqual(without);
 		return;
 	}
 	let i = 0;
 	while (out[i] === without[i]) i++;
-	expectOwnBlock(out, i, without);
+	// At the end, the first extra line is the blank line before the count line.
+	expectOwnBlock(out, i === without.length ? i + 1 : i, without);
 }
 
-/** Line i of out and the blank line after it form a top-level paragraph; without them, out is without as pi parses and renders it. */
+/**
+ * Line i of out and its blank line (before it at the end of out, otherwise after it) form a top-level paragraph;
+ * without them, out is without as pi parses and renders it.
+ */
 function expectOwnBlock(out: string[], i: number, without: string[]) {
-	expect(out[i + 1]).toBe("");
-	expect([...out.slice(0, i), ...out.slice(i + 2)]).toEqual(without);
+	const blankAt = i === out.length - 1 ? i - 1 : i + 1;
+	expect(out[blankAt]).toBe("");
+	const from = Math.min(i, blankAt);
+	expect([...out.slice(0, from), ...out.slice(from + 2)]).toEqual(without);
 	// pi's parser: the count line is a top-level paragraph of its own, and the other blocks keep their shape.
 	const tokens = lex(out.join("\n"));
 	const own = tokens.findIndex((t) => t.type === "paragraph" && t.raw.trim() === out[i]);
@@ -327,6 +333,7 @@ for (const name of ["orderedParen", "introLooseList", "tabFence"] as const) {
 		const md = REVIEW[name];
 		expect(countLineOf(ext, md)).toBeDefined();
 		const lines = md.split("\n");
+		expectOwnBlock([...lines, "", "[[Done 3]] [[Failed 1]]"], lines.length + 1, lines);
 		const place = countPlace(readMarkdown(lines));
 		expectOwnBlock([...lines.slice(0, place), "[[Done 3]] [[Failed 1]]", "", ...lines.slice(place)], place, lines);
 	});

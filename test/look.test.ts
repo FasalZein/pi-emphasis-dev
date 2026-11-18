@@ -79,10 +79,10 @@ describe("edges and icons", () => {
 });
 
 describe("labels", () => {
-	test("bold labels take the blue link color by default", () => expect(draw("**Cause:** x")).toContain(fgEsc("mdLink") + "\uf0e7 Cause:"));
-	test("a theme color name as label color", () => expect(draw("**Cause:** x", { labels: "mdListBullet" })).toContain(fgEsc("mdListBullet") + "\uf0e7 Cause:"));
-	test("a hex label color", () => expect(draw("**Cause:** x", { labels: "#010203" })).toContain("\x1b[38;2;1;2;3m\uf0e7 Cause:"));
-	test("a label after a kind-of-work pill takes its icon", () => expect(draw("[[Implement]] **Result:** yes")).toContain("\uf11e Result:"));
+	test("bold labels take the blue link color by default", () => expect(draw("**Cause:** x")).toContain(fgEsc("mdLink") + "\uf0e7\u2002Cause:"));
+	test("a theme color name as label color", () => expect(draw("**Cause:** x", { labels: "mdListBullet" })).toContain(fgEsc("mdListBullet") + "\uf0e7\u2002Cause:"));
+	test("a hex label color", () => expect(draw("**Cause:** x", { labels: "#010203" })).toContain("\x1b[38;2;1;2;3m\uf0e7\u2002Cause:"));
+	test("a label after a kind-of-work pill takes its icon", () => expect(draw("[[Implement]] **Result:** yes")).toContain("\uf11e\u2002Result:"));
 });
 
 const REPLY = [
@@ -98,11 +98,12 @@ const REPLY = [
 describe("count line", () => {
 	test("one pill per word with its count, asks first, then wrong, open and settled", () =>
 		expect(countLine(REPLY)).toBe("[[Needs you 1]] [[Decision 1]] [[In progress 1]] [[Passed 1]] [[Done 1]]"));
-	test("it goes after the first paragraph", () => {
+	test("it goes after the last block, as its own paragraph, and the lines above it stay as streamed", () => {
 		const lines = draw(REPLY).split("\n");
-		expect(lines[1]).toBe("");
-		expect(lines[2]).toContain("Needs\u00a0you\u00a01");
-		expect(lines[3]).toBe("");
+		const streamed = draw(REPLY + "\n\nz", {}, true).split("\n").slice(0, -2);
+		expect(lines.slice(0, -2)).toEqual(streamed);
+		expect(lines.at(-2)).toBe("");
+		expect(lines.at(-1)).toContain("Needs\u00a0you\u00a01");
 	});
 	test("no count line while the reply streams", () => expect(draw(REPLY, {}, true)).not.toContain("you\u00a01"));
 	test("no count line under 5 state pills", () => expect(countLine(REPLY.split("\n").slice(0, 6).join("\n"))).toBeUndefined());
@@ -121,19 +122,26 @@ describe("count line", () => {
 
 describe("review fixes", () => {
 	test("a heading escapes a $ before a digit too", () => expect(draw("## Costs $5 a month")).toContain("Costs \\$5"));
-	test("a reply that opens with a list takes the count line above the list", () => {
+	test("a reply that ends with a list takes the count line after the list", () => {
 		const md = ["- **Build** [[Passed]] ok", "", "- **Docs** [[Done]] ok", "", "- **Key** [[Needs you]] x", "", "- **V** [[Decision]] y", "", "- **Site** [[Partial]] z"].join("\n");
+		const lines = draw(md).split("\n");
+		expect(lines[0]).toContain("Build");
+		expect(lines.at(-2)).toBe("");
+		expect(lines.at(-1)).toContain("Needs\u00a0you\u00a01");
+	});
+	test("a reply that ends inside an open fence keeps the count line at its place near the top (a line at the end would be code)", () => {
+		const md = ["- **Build** [[Passed]] ok", "", "- **Docs** [[Done]] ok", "", "- **Key** [[Needs you]] x", "", "- **V** [[Decision]] y", "", "- **Site** [[Partial]] z", "", "```", "code"].join("\n");
 		expect(countPlace(readMarkdown(md.split("\n")))).toBe(0);
 		const lines = draw(md).split("\n");
 		expect(lines[0]).toContain("Needs\u00a0you\u00a01");
 		expect(lines[1]).toBe("");
-		expect(lines[2]).toContain("Build");
+		expect(lines.at(-1)).toBe("code");
 	});
 	test("an unknown theme color name in the settings falls back to the default", () => {
 		const strict = { ...truecolor, getFgAnsi: (name: never) => { if (!RGB[name]) throw new Error("Unknown theme color: " + name); return fgEsc(name); } };
 		const settings = { ...DEFAULT_SETTINGS, labels: "teal", colors: { ...DEFAULT_SETTINGS.colors, success: "teal" } };
 		const out = load(strict, settings).draw("**Cause:** [[Done]]");
-		expect(out).toContain(fgEsc("mdLink") + "\uf0e7 Cause:");
+		expect(out).toContain(fgEsc("mdLink") + "\uf0e7\u2002Cause:");
 		expect(out).toContain("\x1b[38;2;195;232;141m");
 	});
 });

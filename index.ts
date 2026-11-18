@@ -21,7 +21,7 @@
 //     settings.json sets edges, icons, label color, tone colors and fill (readSettings()).
 import type { ExtensionAPI, Theme, ThemeBg, ThemeColor, ThemeToken } from "@earendil-works/pi-coding-agent";
 import { backgroundAnsi, type Color, colorToRgb, foregroundAnsi, mixColors, parseColor, type RgbColorValue, rgbColor } from "@earendil-works/pi-tui";
-import { countPlace, mayDefine, type Range, type ReadLine, readBlocks } from "./reader.ts";
+import { countPlace, mayDefine, type Range, type ReadLine, readBlocks, readMarkdown } from "./reader.ts";
 
 type Colorize = (text: string) => string;
 type PillTone = "success" | "error" | "warning" | "ask" | "danger" | "mode" | "owner" | "neutral";
@@ -445,7 +445,29 @@ function decorate(markdown: string, palette: Palette, streaming = false, cache?:
 		({ lines, breaks } = splitLines(restText));
 	}
 	if (head) head.source = markdown;
-	const drawing = draw(lines, palette);
+	let drawing = draw(lines, palette);
+	// Streaming only: an unfinished tail waits until it completes, so it never shows raw and then jumps.
+	if (streaming) {
+		const last = lines.length - 1;
+		const from = heldFrom(lines[last], drawing.read[last]);
+		// The text before a held tail loses its trailing spaces; a line left empty goes, with its line break.
+		const kept = from >= 0 ? lines[last].slice(0, from).replace(/[ \t]+$/, "") : undefined;
+		const cut = kept === "" ? HOLD_LINE : from;
+		if (cut === HOLD_LINE && last === 0) {
+			if (!head) return "";
+			// The held line is all the text after the head: the line break that ends the head text goes too.
+			const lf = markdown[head.length - 1] === "\n" && markdown[head.length - 2] === "\r" ? 2 : 1;
+			return head.out.slice(0, -lf);
+		}
+		if (cut === HOLD_LINE && last > 0) {
+			lines = lines.slice(0, last);
+			breaks = breaks?.slice(0, last - 1);
+			drawing = draw(lines, palette);
+		} else if (kept !== undefined && cut >= 0) {
+			lines = [...lines.slice(0, last), kept];
+			drawing = draw(lines, palette);
+		}
+	}
 	const drawn = joinLines(drawing.lines, breaks);
 	const scoreboard = (head?.scoreboard ?? false) || drawing.scoreboard;
 	// The count line waits for the whole reply: drawn while streaming, it would move the text below it.
@@ -458,9 +480,18 @@ function decorate(markdown: string, palette: Palette, streaming = false, cache?:
 		const lf = (n: number) => Array<string>(n).fill("\n");
 		const allBreaks = breaks || headLines.breaks ? [...(headLines.breaks ?? lf(headLines.lines.length - 1)), ...(breaks ?? lf(lines.length - 1))] : undefined;
 		const [open, close] = boldEnds(palette);
-		const place = countPlace(head ? [...head.read, ...drawing.read] : drawing.read);
-		all.splice(place, 0, drawProse(line, [], palette, open, close), "");
-		allBreaks?.splice(place, 0, "\n", "\n");
+		const read = head ? [...head.read, ...drawing.read] : drawing.read;
+		// After the last block, so nothing above it moves; a reply that ends inside a block a blank line does
+		// not close (an open fence, HTML block or math) keeps the count line at its place near the top.
+		// By readBlocks' boundary rule the lines after the boundary end in the state the whole reply ends in.
+		const atEnd = endsOpen(lines.slice(drawing.boundary + 1)) ? countPlace(read) : all.length;
+		if (atEnd === all.length) {
+			all.push("", drawProse(line, [], palette, open, close));
+			allBreaks?.push("\n", "\n");
+		} else {
+			all.splice(atEnd, 0, drawProse(line, [], palette, open, close), "");
+			allBreaks?.splice(atEnd, 0, "\n", "\n");
+		}
 		out = joinLines(all, allBreaks);
 	} else out = (head?.out ?? "") + drawn;
 	// Streaming only: move the newly finished blocks into the head. A finished reply (the last call, a history
@@ -489,6 +520,52 @@ function decorate(markdown: string, palette: Palette, streaming = false, cache?:
 	}
 	if (cache) cache.head = head;
 	return out;
+}
+
+/** heldFrom: the whole last line waits, with the line break before it. */
+const HOLD_LINE = -2;
+/** The longest text an unfinished pill or bold label may hold before it shows raw: the 32 label characters and its marker. */
+const HOLD_MAX = 34;
+/** Text that may be or turn into code, math or HTML: a tail that holds it is never held. */
+const MAY_BE_LITERAL = /[`$<\\]/;
+const UNESCAPED_AT = (line: string, at: number) => (line.slice(0, at).match(/\\*$/)![0].length % 2 === 0);
+/**
+ * Where the last line of a streaming reply is cut so that its unfinished tail waits: -1 to keep it all,
+ * HOLD_LINE for an unfinished heading (pi trims the text, so a heading is finished only when a line follows),
+ * otherwise the index of an unfinished trailing pill ("[[Wor", "["), an unclosed bold ("**Resu", "*").
+ * Only prose and heading text is held, and never in a line whose text outside literal ranges holds a sign
+ * that may open literal text.
+ */
+function heldFrom(line: string, read: ReadLine): number {
+	if (read.kind === "heading") return read.literal.length === 0 && !MAY_BE_LITERAL.test(line) ? HOLD_LINE : -1;
+	if (read.kind !== "prose" || line === "") return -1;
+	let cut = line.length;
+	const open = line.lastIndexOf("[[");
+	if (open >= 0 && line.length - open <= HOLD_MAX && /^\[\[[^\[\]\n]*\]?$/.test(line.slice(open)) && UNESCAPED_AT(line, open)) cut = open;
+	else if (line.endsWith("[") && !line.endsWith("[[") && UNESCAPED_AT(line, line.length - 1)) cut = line.length - 1;
+	const stars: number[] = [];
+	const inLiteral = (i: number) => read.literal.some(([start, end]) => i >= start && i < end);
+	for (let i = line.indexOf("**"); i >= 0; i = line.indexOf("**", i + 2)) if (UNESCAPED_AT(line, i) && !inLiteral(i)) stars.push(i);
+	const lastStar = stars[stars.length - 1];
+	if (stars.length % 2 === 1 && line.length - lastStar <= HOLD_MAX) cut = Math.min(cut, lastStar);
+	else if (/(^|\s)\*$/.test(line)) cut = Math.min(cut, line.length - 1);
+	if (cut === line.length || read.literal.some(([, end]) => end > cut)) return -1;
+	// An unclosed backtick, a "$" or a "<" anywhere outside the literal ranges may open code, math or HTML that
+	// reaches into the tail.
+	let outside = "";
+	let at = 0;
+	for (const [start, end] of read.literal) {
+		outside += line.slice(at, start);
+		at = end;
+	}
+	return MAY_BE_LITERAL.test(outside + line.slice(at)) ? -1 : cut;
+}
+
+/** A sentinel after the written lines that is not a top-level paragraph: they end inside a block a blank line does not close. */
+function endsOpen(lines: string[]): boolean {
+	const read = readMarkdown([...lines, "", "x"]);
+	const sentinel = read[read.length - 1];
+	return sentinel.kind !== "prose" || !sentinel.plain;
 }
 
 const LINE_BREAK = /\r\n|\r|\n/g;
@@ -536,7 +613,7 @@ function withLabelIcon(label: string): string {
 	if (OWN_ICON.test(label)) return label;
 	const word = label.replace(/[:\s]+$/, "").trim().toLowerCase();
 	const icon = own(LABEL_ICONS, word) ?? (label.trimEnd().endsWith(":") ? own(ACTION_ICONS, word) : undefined);
-	return icon ? `${icon} ${label}` : label;
+	return icon ? icon + ICON_SPACE + label : label;
 }
 
 // A line's leading bold label, after an optional list marker, tree connector, or kind-of-work pill.
@@ -610,7 +687,7 @@ const ACTION_OR_PILL = new RegExp(PILL_SKIP + String.raw`|(?<!\\)(\\*)(\*\*)(${O
 // An action lead-in ends in ":**" and opens with an unescaped "**"; a pill match is kept as written.
 const withActionIcons = (text: string) =>
 	!text.includes(":**") ? text : text.replace(ACTION_OR_PILL, (m: string, slashes?: string, before?: string, word?: string, after?: string) =>
-		word === undefined || slashes!.length % 2 === 1 ? m : slashes! + before + ACTION_ICONS[word.toLowerCase()] + " " + word + after,
+		word === undefined || slashes!.length % 2 === 1 ? m : slashes! + before + ACTION_ICONS[word.toLowerCase()] + ICON_SPACE + word + after,
 	);
 
 // A prose line without any of these marks draws as written: every step below leaves it unchanged.

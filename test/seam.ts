@@ -55,16 +55,25 @@ export function load(theme: unknown, emphasis?: unknown, mode = "tui"): Loaded {
 }
 
 /**
- * The count line as drawn into a finished reply: the line it holds that the streaming drawing (which
- * waits with the count line) lacks. Undefined when the finished reply has no extra lines.
+ * The drawing of a reply without its count line: the streaming drawing (which waits with the count line) of the
+ * reply followed by a finished paragraph, so no unfinished tail of the reply is held back, minus that paragraph.
+ */
+export function drawWithoutCount(ext: Loaded, markdown: string): string[] {
+	return ext.draw(markdown + "\n\nz", true).split("\n").slice(0, -2);
+}
+
+/**
+ * The count line as drawn into a finished reply: the line it holds that the drawing without the count line
+ * lacks (at the end, after its blank line; or, in a reply that ends inside an open block, nearer the top).
+ * Undefined when the finished reply has no extra lines.
  */
 export function countLineOf(ext: Loaded, markdown: string): string | undefined {
 	const out = ext.draw(markdown).split("\n");
-	const without = ext.draw(markdown, true).split("\n");
+	const without = drawWithoutCount(ext, markdown);
 	if (out.length === without.length) return undefined;
 	let i = 0;
 	while (out[i] === without[i]) i++;
-	return out[i];
+	return i === without.length ? out[i + 1] : out[i];
 }
 
 // A drawn pill's visible text sits between bold on and the bold/reverse reset (pill() in index.ts).

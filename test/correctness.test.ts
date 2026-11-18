@@ -46,7 +46,7 @@ describe("line endings and fences", () => {
 		expect(piShown(md, ["Intro", "[[Failed]] [[Failed]]"])).toEqual([true, false]);
 		const line = countLineOf(ext, md);
 		expect(line).toBeDefined();
-		expect(ext.draw(md).replace(line + "\n\n", "")).toBe(ext.draw(md, true));
+		expect(ext.draw(md).replace("\n\n" + line, "")).toBe(ext.draw(md, true));
 	});
 });
 
@@ -157,7 +157,7 @@ describe("review round 1", () => {
 		const out = streamed.draw(other);
 		expect(out).toBe(load(stub).draw(other));
 		const line = countLineOf(ext, other)!;
-		expect(out.replace(line + "\n\n", "").match(EOL)).toEqual(other.match(EOL));
+		expect(out.replace("\n\n" + line, "").match(EOL)).toEqual(other.match(EOL));
 	});
 	// Link targets: pi's exact target survives the drawing, and no pill hidden in metadata is drawn.
 	for (const md of [
