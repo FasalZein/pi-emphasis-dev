@@ -542,12 +542,15 @@ function opensMath(text: string, at: number): boolean {
 }
 
 /** Escapes currency signs in prose, outside pills and math. */
+// Only a "$" before a digit is escaped; a pill match is kept as written.
+const DOLLAR_DIGIT = /\$\d/;
 const escapeProse = (text: string) =>
-	!text.includes("$") ? text : text.replace(DOLLAR_OR_PILL, (m: string, at: number) => (m !== "$" || opensMath(text, at) ? m : "\\$"));
+	!DOLLAR_DIGIT.test(text) ? text : text.replace(DOLLAR_OR_PILL, (m: string, at: number) => (m !== "$" || opensMath(text, at) ? m : "\\$"));
 
 const ACTION_OR_PILL = new RegExp(String.raw`\[\[[^\[\]\n]{1,32}\]\]|(\*\*)(${Object.keys(ACTION_ICONS).join("|")})(:\*\*)`, "gi");
+// An action lead-in ends in ":**"; a pill match is kept as written.
 const withActionIcons = (text: string) =>
-	!text.includes("**") ? text : text.replace(ACTION_OR_PILL, (m: string, before?: string, word?: string, after?: string) =>
+	!text.includes(":**") ? text : text.replace(ACTION_OR_PILL, (m: string, before?: string, word?: string, after?: string) =>
 		word === undefined ? m : before + ACTION_ICONS[word.toLowerCase()] + " " + word + after,
 	);
 
