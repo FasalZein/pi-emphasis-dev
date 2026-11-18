@@ -19,7 +19,7 @@ Pi Emphasis changes how an assistant reply is drawn in Pi's terminal. It never c
 - **Settings**: the optional `emphasis` block of pi's settings.json, read once per session start.
 - **Reply guidance**: the rules added to the system prompt as the `reply_style` section, in the terminal interface only.
 - **Palette**: the colors built from the current Pi theme and the settings. It is rebuilt when the theme changes.
-- **Block reader**: the part that reads a reply's Markdown lines the way pi's parser does. For each line it gives a kind (prose, heading, code or blank), the literal ranges (inline code, HTML comments) and whether the line is plain top-level text. It also gives the place of the count line. The drawing and the count line both use it, so a pill is counted exactly when it is drawn.
+- **Block reader**: the part that reads a reply's Markdown lines the way pi's parser does. For each line it gives a kind (prose, heading, code or blank), the literal ranges (inline code, HTML comments, inline math) and whether the line is plain top-level text. It also gives the place of the count line. The drawing and the count line both use it, so a pill is counted exactly when it is drawn.
 
 ## Rules and where each lives
 
@@ -35,7 +35,7 @@ All rules live in `index.ts` and `reader.ts` and are tested in `test/` without P
 - When and where the count line appears: `tally`, `countPlace` (in `reader.ts`) and `COUNT_LINE_MIN`; `countLine` gives it for a reply.
 - What the agent is told: `REPLY_STYLE`, fixed text; `test/reply-style.test.ts` checks that each word it names is in the tables above.
 - How a pill label splits into icon, word and detail: `splitLabel`.
-- What is prose and what stays untouched (code in any container, inline code, HTML comments, escaped markers): the block reader, `readMarkdown` in `reader.ts`, shared by the drawing (`drawProse`, `drawHeading`) and the count line.
+- What is prose and what stays untouched (code in any container, inline code, HTML comments, top-level math, escaped markers): the block reader, `readMarkdown` in `reader.ts`, shared by the drawing (`drawProse`, `drawHeading`) and the count line.
 
 ## Border
 

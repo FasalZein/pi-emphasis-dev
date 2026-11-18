@@ -347,23 +347,32 @@ test("every pill the block reader reads as prose is outside code as pi's parser 
 		}
 	}, { derandomize: true, testCases: 1000 }));
 
-// Display math blocks (pi-tui latexBlock): pi shows a closed block as math, so its pills are neither drawn
-// nor counted; an unclosed one, or one that a quote or an HTML block holds, reads on as before.
+// Math (pi-tui's latexBlock and latex extensions): pi shows closed math as math, so its pills are neither drawn
+// nor counted; unclosed math, math after an unclosed mark and math in an HTML block read on as before. The
+// reader takes math only at top level: math in a quote or a list item is a documented limit (drawn as before).
 // Expected values come from pi's own rendering (test/oracle.ts).
 const MATH = [
 	"Intro\n\n$$\n[[Done p0q]]\n$$\n\n[[Done p1q]]",
 	"$$ [[Done p0q]]\nx [[Done p1q]] $$\n[[Done p2q]]",
 	"\\[\n[[Done p0q]]\n\\]\n\n[[Done p1q]]",
-	"- item\n  $$\n  [[Done p0q]]\n  $$\n- [[Done p1q]]",
-	"> $$\n> [[Done p0q]]\n> $$\n\n[[Done p1q]]",
-	"> $$\n[[Done p0q]] $$",
 	"$$\n$$\n[[Done p0q]]",
 	"<div>\n$$\n[[Done p0q]]\n$$",
+	"x $[[Done p0q]]$ y [[Done p1q]]",
+	"text x $$[[Done p0q]]$$ y and \\([[Done p1q]]\\) z [[Done p2q]]",
+	"## Status $[[Done p0q]]$ and [[Done p1q]]",
+	"costs $[[Done p0q]]$5 and $[[Done p1q]] $ and \\$[[Done p2q]]$",
+	"$FOO$[[Done p0q]] and $A$ x $[[Done p1q]]$",
+	"x $[[Done p0q]] \u0060y\u0060$ z",
+	"x $$[[Done p0q]]$$ y [[Done p1q]]",
+	"open $$ [[Done p0q]]\nx $[[Done p1q]]$ y\n\nnext $[[Done p2q]]$",
 ];
 for (const md of MATH) {
-	test("display math: the block reader draws exactly the pills pi shows as prose in " + JSON.stringify(md), () => {
+	test("math: the block reader draws exactly the pills pi shows as prose in " + JSON.stringify(md), () => {
 		const ids = [...md.matchAll(/p\d+q/g)].map((m) => m[0]);
-		const drawn = new Set(prosePills(md).map((p) => p.split(" ")[1]));
+		const lines = md.split("\n");
+		const read = readMarkdown(lines);
+		// Pills the drawing gets: in prose and heading lines, outside literal ranges.
+		const drawn = new Set(lines.flatMap((line, i) => (read[i].kind !== "prose" && read[i].kind !== "heading" ? [] : [...line.matchAll(PILL)].filter((m) => !read[i].literal.some(([s, e]) => m.index < e && m.index + m[0].length > s)).map((m) => m[1].split(" ")[1]))));
 		expect(ids.map((id) => drawn.has(id))).toEqual(piShown(md, ids));
 	});
 }
