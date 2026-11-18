@@ -20,6 +20,13 @@ const FENCE_OPEN = /^(\x60{3,}|~{3,})(.*)$/;
 const FENCE_CLOSE = /^(\x60{3,}|~{3,}) *$/;
 const HEADING = /^#{1,6}(?: |$)/;
 const THEMATIC_BREAK = /^(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/;
+// pi's display math block (pi-tui latexBlock): "$" or "\[" opening a block, up to the first "$" or "\]"
+// that ends a line.
+const MATH_MARKS = [
+	{ open: /^\$\$[ \t]*/, close: /\$\$[ \t]*$/ },
+	{ open: /^\\\[[ \t]*/, close: /\\\][ \t]*$/ },
+];
+const TABLE_DELIMITER = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
 // A line that may end a paragraph and open another block: a code span reaching past it is uncertain.
 const INTERRUPT = /^(?:\x60{3,}|~{3,}|#{1,6}(?: |$)|>|<|(?:[-*+]|\d{1,9}[.)])(?: |$))/;
 
@@ -69,6 +76,10 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 	let paragraph = false;
 	let emptyItem = false;
 	let previousDepth = 0;
+	// Display math opens no block after an unclosed math mark (pi then shows the rest as written) or inside a
+	// paragraph that opens with "<" (pi may read it as an HTML block up to a blank line).
+	let mathOff = false;
+	let htmlParagraph = false;
 	// A code span or an HTML comment that may close on a later line: lines up to its end are literal, whichever way pi reads them.
 	let literalUntil: { line: number; end: number; uncertain: boolean } | undefined;
 	const untilNow = () => literalUntil;
@@ -202,6 +213,7 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 			if (emptyItem) listColumns.pop();
 			emptyItem = false;
 			paragraph = false;
+			htmlParagraph = false;
 			push({ kind: "blank", literal: [], plain: false }, i);
 			continue;
 		}
@@ -271,6 +283,18 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 			push(code, i);
 			continue;
 		}
+		// pi shows a closed display math block as math, so its pills stay literal. An unclosed one pi shows as
+		// written (or, without math in it, reads as a paragraph); the reader then reads on as usual.
+		// A lazy line continues the paragraph before it (in a quote or a list item) and opens no block.
+		const itemLazy = paragraph && !marker && innerDepth === 0 && indent < base;
+		const mathEnd = !mathOff && !htmlParagraph && !lazy && !itemLazy && (marker || innerDepth > 0 || indent - base <= 3) ? mathBlockEnd(lines, i, content, depth + innerDepth, marker || listColumns.length ? contentBase : 0) : -1;
+		if (mathEnd < 0 && MATH_MARKS.some((m) => m.open.test(content))) mathOff = true;
+		if (mathEnd >= 0) {
+			paragraph = false;
+			for (; i <= mathEnd; i++) push(code, i);
+			i--;
+			continue;
+		}
 		const open = content.match(FENCE_OPEN);
 		if (open && (marker || innerDepth > 0 || indent - base <= 3) && !(open[1][0] === "\x60" && open[2].includes("\x60"))) {
 			fence = { char: open[1][0], length: open[1].length, base: innerDepth ? 0 : contentBase, depth: depth + innerDepth, line: i };
@@ -300,11 +324,42 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 			continue;
 		}
 		// An empty list item holds no paragraph yet.
+		if (!paragraph && content.startsWith("<")) htmlParagraph = true;
 		paragraph = !emptyItem;
 		const paragraphPlain = plain && !/^[<|]/.test(body);
 		push({ kind: "prose", literal: literalOf(i, true), plain: paragraphPlain }, i);
 	}
 	return read;
+}
+
+/**
+ * The last line of the display math block that content (line i after its container markers) opens, or -1.
+ * The closing mark must be in the same container: the same quote depth and, in a list item, indented to
+ * its content. Follows pi-tui's tokenizeBlockLatex: the math between the marks is not empty and holds no table start.
+ */
+function mathBlockEnd(lines: string[], i: number, content: string, depth: number, itemBase: number): number {
+	const marks = MATH_MARKS.find((m) => m.open.test(content));
+	if (!marks) return -1;
+	const MATH_CLOSE = marks.close;
+	const open = content.match(marks.open)!;
+	const rest = content.slice(open[0].length);
+	const close = rest.match(MATH_CLOSE);
+	if (close) return rest.length > close[0].length ? i : -1;
+	const math = [rest];
+	for (let k = i + 1; k < lines.length; k++) {
+		const inner = blockOf(lines[k]);
+		if (inner.depth !== depth || (inner.body && inner.indent < itemBase)) return -1;
+		const end = lines[k].match(MATH_CLOSE);
+		math.push(end ? lines[k].slice(0, end.index) : lines[k]);
+		if (!end) continue;
+		// pi drops the line break right after the opening "$$"; nothing else may be left.
+		const body = (rest === "" ? math.slice(1) : math).join("\n");
+		if (!body) return -1;
+		const rows = body.split("\n");
+		for (let r = 0; r + 1 < rows.length; r++) if ((rows[r + 1].includes("|") || rows[r].includes("|")) && TABLE_DELIMITER.test(rows[r + 1])) return -1;
+		return k;
+	}
+	return -1;
 }
 
 /**

@@ -7,6 +7,7 @@ import { Markdown, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui
 import { Marked, type Token } from "marked";
 import { DEFAULT_SETTINGS, VOCABULARY, countLine, createPalette, decorate, readSettings } from "../index.ts";
 import { countPlace, readMarkdown } from "../reader.ts";
+import { piShown } from "./oracle.ts";
 
 const TONES = ["success", "error", "warning", "ask", "danger", "mode", "owner", "neutral"] as const;
 const COLOR = /^(#[0-9a-fA-F]{6}|[A-Za-z][A-Za-z0-9]*)$/;
@@ -334,22 +335,35 @@ const LINES = [
 	"text \x60PILL\x60 and PILL", "\x60\x60PILL\x60\x60", "\x60\x60\x60", "~~~", "> \x60\x60\x60", "  \x60\x60\x60", "\t\x60\x60\x60", "- \x60\x60\x60",
 	"    PILL", "\t\tPILL", "      PILL", "<!-- PILL -->", "<!--", "PILL -->", "## PILL", "", "", "Intro sentence.", "---",
 ];
-function codeRaws(tokens: Token[], out: string[] = []): string[] {
-	for (const t of tokens as (Token & { tokens?: Token[]; items?: Token[] })[]) {
-		if (t.type === "code" || t.type === "codespan" || (t.type === "html" && t.raw.includes("<!--"))) out.push(t.raw);
-		if (t.tokens) codeRaws(t.tokens, out);
-		if (t.items) codeRaws(t.items, out);
-	}
-	return out;
-}
 test("every pill the block reader reads as prose is outside code as pi's parser reads the reply", () =>
 	hegel.test((tc) => {
 		const lines = tc.draw(gs.arrays(gs.sampledFrom(LINES), { minSize: 1, maxSize: 12 }));
 		let n = 0;
 		const md = lines.map((l) => l.replace(/PILL/g, () => "[[Done p" + n++ + "q]]")).join("\n");
 		const prose = new Set(prosePills(md));
-		const code = codeRaws(lex(md)).join("\n");
+		const shown = piShown(md, Array.from({ length: n }, (_, i) => "p" + i + "q"));
 		for (let i = 0; i < n; i++) {
-			if (prose.has("Done p" + i + "q")) expect(code).not.toContain("p" + i + "q");
+			if (prose.has("Done p" + i + "q")) expect(shown[i]).toBe(true);
 		}
 	}, { derandomize: true, testCases: 1000 }));
+
+// Display math blocks (pi-tui latexBlock): pi shows a closed block as math, so its pills are neither drawn
+// nor counted; an unclosed one, or one that a quote or an HTML block holds, reads on as before.
+// Expected values come from pi's own rendering (test/oracle.ts).
+const MATH = [
+	"Intro\n\n$$\n[[Done p0q]]\n$$\n\n[[Done p1q]]",
+	"$$ [[Done p0q]]\nx [[Done p1q]] $$\n[[Done p2q]]",
+	"\\[\n[[Done p0q]]\n\\]\n\n[[Done p1q]]",
+	"- item\n  $$\n  [[Done p0q]]\n  $$\n- [[Done p1q]]",
+	"> $$\n> [[Done p0q]]\n> $$\n\n[[Done p1q]]",
+	"> $$\n[[Done p0q]] $$",
+	"$$\n$$\n[[Done p0q]]",
+	"<div>\n$$\n[[Done p0q]]\n$$",
+];
+for (const md of MATH) {
+	test("display math: the block reader draws exactly the pills pi shows as prose in " + JSON.stringify(md), () => {
+		const ids = [...md.matchAll(/p\d+q/g)].map((m) => m[0]);
+		const drawn = new Set(prosePills(md).map((p) => p.split(" ")[1]));
+		expect(ids.map((id) => drawn.has(id))).toEqual(piShown(md, ids));
+	});
+}
