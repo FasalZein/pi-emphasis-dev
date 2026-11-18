@@ -12,7 +12,7 @@
   "pi": {
     "extensions": ["./index.ts"]
   },
-  "files": ["index.ts", "README.md", "LICENSE"],
+  "files": ["index.ts", "README.md", "LICENSE", "DESIGN.md", "screenshots/"],
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=1.5.0 <2"
   },

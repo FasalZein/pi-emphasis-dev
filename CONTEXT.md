@@ -29,7 +29,7 @@ All rules live in `index.ts` and are tested in `test/` without Pi running: `emph
 - Which words are synonyms: `SYNONYMS`.
 - Which labels take an icon: `LABEL_ICONS`, applied by `withLabelIcon`.
 - Which lead-in words take an icon after a pill: `ACTION_ICONS`.
-- What the settings may hold and their defaults: `readSettings` and `DEFAULT_SETTINGS`; docs/configuration.md describes them for people.
+- What the settings may hold and their defaults: `readSettings` and `DEFAULT_SETTINGS`; the README section "Settings" describes them for people.
 - How a tone becomes escapes: `createPalette` (`PANEL_MIX`, the contrast pick for solid pills, the 256-color fallback).
 - When and where the count line appears: `tally`, `countPlace` and `COUNT_LINE_MIN`; `countLine` gives it for a reply.
 - What the agent is told: `REPLY_STYLE`, fixed text; `test/reply-style.test.ts` checks that each word it names is in the tables above.
