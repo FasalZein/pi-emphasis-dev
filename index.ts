@@ -87,8 +87,6 @@ export interface Palette {
 	edges?: Edges;
 	/** The glyph of each icon group; undefined draws no icons. */
 	icons?: Record<string, string>;
-	/** Draw the count line of the reply's pills under the first paragraph. */
-	countLine?: boolean;
 }
 
 /** Minimal slice of Pi's Theme used to build a palette. */
@@ -286,15 +284,11 @@ export function createPalette(theme: ThemeLike, settings: EmphasisSettings = DEF
 		tree: fg("dim"),
 		edges: settings.edges,
 		icons: settings.icons === "none" ? undefined : ICON_SETS[settings.icons],
-		countLine: true,
 	};
 }
 
-const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 // Escaped bold markers, bold markers, or a [[pill]] of 1-32 characters.
 const INLINE = /(\\*)(\*\*|__)|\[\[([^\[\]\n]{1,32})\]\]/g;
-const PILL = /\[\[([^\[\]\n]{1,32})\]\]/g;
-const CODE_SPAN = /`+[^`]*?`+/g;
 // A written scoreboard: a line of two or more pills and nothing else.
 const PILLS_ONLY = /^\s*\[\[[^\[\]\n]{1,32}\]\](?:\s*\[\[[^\[\]\n]{1,32}\]\])+\s*$/;
 /** The fewest state pills (ask, error, warning or success) a reply needs for a count line. */
@@ -306,89 +300,304 @@ const DISPLAY = Object.fromEntries(
 		.map((w) => [w.toLowerCase(), w[0].toUpperCase() + w.slice(1)]),
 );
 
-/**
- * The count line of a reply: one pill per state word with its count, asks first. Undefined when the
- * reply has fewer than COUNT_LINE_MIN state pills, only one state word, or a line of only pills already.
- */
-export function countLine(markdown: string): string | undefined {
-	const tally = new Map<string, number>();
-	let fence: string | undefined;
-	let total = 0;
-	for (const line of markdown.split("\n")) {
-		const f = line.match(FENCE);
-		if (fence) {
-			if (f && f[1][0] === fence[0] && f[1].length >= fence.length) fence = undefined;
-			continue;
-		}
-		if (f) {
-			fence = f[1];
-			continue;
-		}
-		if (/^ {0,3}#{1,6}\s/.test(line)) continue;
-		const prose = line.replace(CODE_SPAN, "");
-		if (PILLS_ONLY.test(prose)) return undefined;
-		for (const m of prose.matchAll(PILL)) {
-			const tone = toneOf(m[1]);
-			if (!COUNT_ORDER.includes(tone)) continue;
-			const { key } = splitLabel(m[1]);
-			tally.set(key, (tally.get(key) ?? 0) + 1);
-			total++;
-		}
+// Which text of a reply is prose that may be drawn. The drawing and the count line share this one
+// reading, so a pill is counted exactly when it is drawn. It follows CommonMark as pi's parser applies it,
+// after pi's own tab replacement (three spaces). Where it cannot be sure, it reads code: that text is
+// neither drawn nor counted.
+type Range = [start: number, end: number];
+interface ReadLine {
+	kind: "prose" | "heading" | "code" | "blank";
+	/** Ranges of a prose or heading line that stay literal: inline code and HTML comments. */
+	literal: Range[];
+	/** A line of a top-level paragraph or heading: no block quote, no list, indented 3 or fewer. */
+	plain: boolean;
+}
+
+const QUOTE = /^ {0,3}> ?/;
+const LIST_MARKER = /^([-*+]|\d{1,9}[.)])( +|$)/;
+const FENCE_OPEN = /^(\x60{3,}|~{3,})(.*)$/;
+const FENCE_CLOSE = /^(\x60{3,}|~{3,}) *$/;
+const HEADING = /^#{1,6}(?: |$)/;
+// A line that ends a paragraph or may open another block: a code span does not continue onto it.
+const INTERRUPT = /^(?:\x60{3,}|~{3,}|#{1,6}(?: |$)|>|<|(?:[-*+]|\d{1,9}[.)])(?: |$))/;
+
+/** A line as pi's parser sees its block: tabs as three spaces, block quote markers removed. */
+function blockOf(line: string): { quoted: boolean; indent: number; body: string } {
+	let rest = line.replace(/\t/g, "   ");
+	let quoted = false;
+	for (let q = rest.match(QUOTE); q; q = rest.match(QUOTE)) {
+		rest = rest.slice(q[0].length);
+		quoted = true;
 	}
-	if (total < COUNT_LINE_MIN || tally.size < 2) return undefined;
-	return [...tally.keys()]
+	const indent = rest.match(/^ */)![0].length;
+	return { quoted, indent, body: rest.slice(indent) };
+}
+
+/** The start of the first run of exactly n backticks at or after from, or -1. */
+function backtickRun(text: string, from: number, n: number): number {
+	for (let i = from; i < text.length; ) {
+		if (text[i] !== "\x60") {
+			i++;
+			continue;
+		}
+		let j = i;
+		while (text[j] === "\x60") j++;
+		if (j - i === n) return i;
+		i = j;
+	}
+	return -1;
+}
+
+function readMarkdown(lines: string[]): ReadLine[] {
+	const read: ReadLine[] = [];
+	let fence: { char: string; length: number; base: number } | undefined;
+	let indentedBase: number | undefined;
+	let paragraph = false;
+	let comment = false;
+	let span: { line: number; end: number; plain: boolean } | undefined;
+	const listColumns: number[] = [];
+	const code: ReadLine = { kind: "code", literal: [], plain: false };
+
+	// The literal ranges of line i from "from" on. An unclosed code span may close on a later line of the
+	// same paragraph; the lines up to its end are then literal too.
+	const inline = (i: number, from: number, plain: boolean, multiline: boolean): Range[] => {
+		const text = lines[i];
+		const literal: Range[] = from > 0 ? [[0, from]] : [];
+		for (let p = from; p < text.length; ) {
+			if (text[p] === "\\") {
+				p += 2;
+				continue;
+			}
+			if (text.startsWith("<!--", p)) {
+				const end = text.indexOf("-->", p + 4);
+				if (end < 0) {
+					literal.push([p, text.length]);
+					comment = true;
+					break;
+				}
+				literal.push([p, end + 3]);
+				p = end + 3;
+				continue;
+			}
+			if (text[p] !== "\x60") {
+				p++;
+				continue;
+			}
+			let q = p;
+			while (text[q] === "\x60") q++;
+			const close = backtickRun(text, q, q - p);
+			if (close >= 0) {
+				literal.push([p, close + q - p]);
+				p = close + q - p;
+				continue;
+			}
+			for (let k = i + 1; multiline && k < lines.length; k++) {
+				const { body } = blockOf(lines[k]);
+				if (!body.trim() || INTERRUPT.test(body)) break;
+				const c = backtickRun(lines[k], 0, q - p);
+				if (c >= 0) {
+					span = { line: k, end: c + q - p, plain };
+					break;
+				}
+			}
+			if (span) {
+				literal.push([p, text.length]);
+				break;
+			}
+			p = q;
+		}
+		return literal;
+	};
+
+	for (let i = 0; i < lines.length; i++) {
+		if (span) {
+			const { plain } = span;
+			if (span.line > i) {
+				read.push({ kind: "prose", literal: [[0, lines[i].length]], plain });
+				continue;
+			}
+			const from = span.end;
+			span = undefined;
+			read.push({ kind: "prose", literal: inline(i, from, plain, true), plain });
+			continue;
+		}
+		if (comment) {
+			// An open HTML comment: hidden by pi up to its end.
+			const close = lines[i].indexOf("-->");
+			if (close < 0) {
+				read.push(code);
+				continue;
+			}
+			comment = false;
+			paragraph = true;
+			read.push({ kind: "prose", literal: inline(i, close + 3, false, true), plain: false });
+			continue;
+		}
+		const { quoted, indent, body } = blockOf(lines[i]);
+		if (fence) {
+			const close = body.match(FENCE_CLOSE);
+			if (close && close[1][0] === fence.char && close[1].length >= fence.length && indent - fence.base <= 3) fence = undefined;
+			read.push(code);
+			continue;
+		}
+		if (indentedBase !== undefined) {
+			if (!body.trim() || indent >= indentedBase + 4) {
+				read.push(code);
+				continue;
+			}
+			indentedBase = undefined;
+		}
+		if (!body.trim()) {
+			paragraph = false;
+			read.push({ kind: "blank", literal: [], plain: false });
+			continue;
+		}
+		// After a blank line, a line indented less than a list item's content ends that item.
+		if (!paragraph) while (listColumns.length && listColumns[listColumns.length - 1] > indent) listColumns.pop();
+		const base = listColumns.at(-1) ?? 0;
+		if (!paragraph && indent >= base + 4) {
+			indentedBase = base;
+			read.push(code);
+			continue;
+		}
+		let content = body;
+		let contentBase = Math.min(base, indent);
+		const marker = body.match(LIST_MARKER);
+		if (marker) {
+			while (listColumns.length && listColumns[listColumns.length - 1] > indent) listColumns.pop();
+			const spaces = marker[2].length;
+			contentBase = indent + marker[1].length + (spaces >= 1 && spaces <= 4 ? spaces : 1);
+			listColumns.push(contentBase);
+			content = body.slice(marker[0].length);
+		}
+		const open = content.match(FENCE_OPEN);
+		if (open && !(open[1][0] === "\x60" && open[2].includes("\x60"))) {
+			fence = { char: open[1][0], length: open[1].length, base: contentBase };
+			paragraph = false;
+			read.push(code);
+			continue;
+		}
+		const plain = !quoted && !marker && listColumns.length === 0 && indent <= 3;
+		if (!marker && HEADING.test(content) && indent - base <= 3) {
+			paragraph = false;
+			read.push({ kind: "heading", literal: inline(i, 0, false, false), plain });
+			continue;
+		}
+		paragraph = true;
+		const paragraphPlain = plain && !/^[<|]/.test(body);
+		read.push({ kind: "prose", literal: inline(i, 0, paragraphPlain, true), plain: paragraphPlain });
+	}
+	return read;
+}
+
+/**
+ * Where the count line goes: after the reply's first block when that is a top-level paragraph or heading
+ * closed by a blank line, otherwise above the first block. Both are top-level block boundaries, so the
+ * inserted line and its blank line never join, split or enter another block.
+ */
+function countPlace(read: ReadLine[]): number {
+	const first = read.findIndex((l) => l.kind !== "blank");
+	if (first < 0) return 0;
+	let end = first;
+	if (read[first].kind === "heading") end = read[first].plain ? first + 1 : first;
+	else while (end < read.length && read[end].kind === "prose" && read[end].plain) end++;
+	return end > first && read[end]?.kind === "blank" ? end + 1 : first;
+}
+
+/** The count line of drawn pill labels: one pill per state word with its count, asks first. */
+function tally(labels: string[]): string | undefined {
+	const counts = new Map<string, number>();
+	let total = 0;
+	for (const label of labels) {
+		if (!COUNT_ORDER.includes(toneOf(label))) continue;
+		const { key } = splitLabel(label);
+		counts.set(key, (counts.get(key) ?? 0) + 1);
+		total++;
+	}
+	if (total < COUNT_LINE_MIN || counts.size < 2) return undefined;
+	return [...counts.keys()]
 		.sort((a, b) => COUNT_ORDER.indexOf(toneOf(a)) - COUNT_ORDER.indexOf(toneOf(b)))
-		.map((k) => "[[" + (own(DISPLAY, k) ?? k) + " " + tally.get(k) + "]]")
+		.map((k) => "[[" + (own(DISPLAY, k) ?? k) + " " + counts.get(k) + "]]")
 		.join(" ");
 }
 
-const LIST_ITEM = /^\s*(?:[-*+]|\d+\.)\s/;
-/**
- * The count line goes after the reply's first paragraph, unless that paragraph holds a code fence.
- * A reply that opens with a list takes it above the list, so it never splits the list's items.
- */
-function withCountLine(markdown: string): string {
-	const line = countLine(markdown);
-	if (!line) return markdown;
+interface Drawing {
+	lines: string[];
+	/** The labels of the pills drawn, in order. */
+	pills: string[];
+	/** The reply holds a written scoreboard, a line of only pills. */
+	scoreboard: boolean;
+	/** The line index before which the count line goes. */
+	place: number;
+}
+
+const boldEnds = (palette: Palette) => palette.bold("\u0000").split("\u0000") as [string, string];
+
+/** Draws each line of a reply; every output line is the drawing of the input line with the same index. */
+function draw(markdown: string, palette: Palette): Drawing {
 	const lines = markdown.split("\n");
-	const first = lines.findIndex((l) => l.trim());
-	if (LIST_ITEM.test(lines[first])) return [...lines.slice(0, first), line, "", ...lines.slice(first)].join("\n");
-	let end = lines.findIndex((l, i) => i > first && !l.trim());
-	if (end < 0) end = lines.length;
-	if (lines.slice(first, end).some((l) => FENCE.test(l))) return markdown;
-	return [...lines.slice(0, end), "", line, ...lines.slice(end)].join("\n");
+	const read = readMarkdown(lines);
+	const [open, close] = boldEnds(palette);
+	const pills: string[] = [];
+	let scoreboard = false;
+	const out = lines.map((line, i) => {
+		const { kind, literal } = read[i];
+		if (kind === "heading") return drawHeading(line, literal);
+		if (kind !== "prose") return line;
+		if (literal.length === 0 && PILLS_ONLY.test(line)) scoreboard = true;
+		return drawProse(line, literal, palette, open, close, pills);
+	});
+	return { lines: out, pills, scoreboard, place: countPlace(read) };
 }
 
-/** Apply colors to assistant Markdown, leaving code blocks, inline code and headings alone. */
+const COUNT_PALETTE: Palette = { bold: (t) => t, pills: Object.fromEntries(TONES.map((t) => [t, { label: "", cap: "" }])) as Record<PillTone, PillStyle> };
+
+/**
+ * The count line of a reply, from the pills that decorate draws. Undefined when it draws fewer than
+ * COUNT_LINE_MIN state pills, only one state word, or the reply holds a line of only pills already.
+ */
+export function countLine(markdown: string): string | undefined {
+	const drawing = draw(markdown, COUNT_PALETTE);
+	return drawing.scoreboard ? undefined : tally(drawing.pills);
+}
+
+/** Apply colors to assistant Markdown, leaving code, HTML comments and headings' text alone. */
 export function decorate(markdown: string, palette: Palette, streaming = false): string {
+	const drawing = draw(markdown, palette);
 	// The count line waits for the whole reply: drawn while streaming, it would move the text below it.
-	const source = palette.countLine && !streaming ? withCountLine(markdown) : markdown;
-	const [open, close] = palette.bold("\u0000").split("\u0000") as [string, string];
-	const out: string[] = [];
-	let fence: string | undefined;
-	for (const line of source.split("\n")) {
-		const fenceMatch = line.match(FENCE);
-		if (fence) {
-			if (fenceMatch && fenceMatch[1][0] === fence[0] && fenceMatch[1].length >= fence.length) fence = undefined;
-			out.push(line);
-		} else if (fenceMatch) {
-			fence = fenceMatch[1];
-			out.push(line);
-		} else if (/^ {0,3}#{1,6}\s/.test(line)) {
-			// Pi already colors headings.
-			out.push(line.replace(/^( {0,3}#{1,6}\s+)(.+)$/, (_, hashes: string, title: string) => hashes + escapeCurrency(withLabelIcon(title))));
-		} else {
-			out.push(decorateLine(line, palette, open, close));
-		}
+	const line = streaming || drawing.scoreboard ? undefined : tally(drawing.pills);
+	if (line) {
+		const [open, close] = boldEnds(palette);
+		drawing.lines.splice(drawing.place, 0, drawProse(line, [], palette, open, close), "");
 	}
-	return out.join("\n");
+	return drawing.lines.join("\n");
 }
 
+const HEADING_LINE = /^([ \t>]*#{1,6}[ \t]+)(.+)$/;
+/** Pi already colors headings: a heading only takes its label icon and the currency escape. */
+function drawHeading(line: string, literal: Range[]): string {
+	const text = partsOf(line, literal)
+		.map((p) => (p.literal ? p.text : escapeProse(p.text)))
+		.join("");
+	return text.replace(HEADING_LINE, (_, hashes: string, title: string) => hashes + withLabelIcon(title));
+}
+
+/** A line cut into its literal ranges and the prose between them. */
+function partsOf(line: string, literal: Range[]): { text: string; literal: boolean }[] {
+	const parts: { text: string; literal: boolean }[] = [];
+	let at = 0;
+	for (const [start, end] of literal) {
+		if (start > at) parts.push({ text: line.slice(at, start), literal: false });
+		parts.push({ text: line.slice(start, end), literal: true });
+		at = end;
+	}
+	if (at < line.length || parts.length === 0) parts.push({ text: line.slice(at), literal: false });
+	return parts;
+}
 /** Lead-in words that name the action a pill calls for. With a colon they take an icon anywhere in a line. */
 const ACTION_ICONS: Record<string, string> = {
 	check: "\uf046", do: "\uf0a4", next: "\uf061", unblock: "\uf09c", left: "\uf141", run: "\uf04b", guard: "\uf132", undo: "\uf0e2", see: "\uf08e",
 };
-const ACTION_LABEL = new RegExp(`(\\*\\*)(${Object.keys(ACTION_ICONS).join("|")})(:\\*\\*)`, "gi");
 
 /** Prefix a known label with its icon, unless it already opens with a glyph. */
 function withLabelIcon(label: string): string {
@@ -416,7 +625,8 @@ function pill(label: string, palette: Palette): string {
 	const style = palette.pills![toneOf(label)];
 	// No-break spaces keep a two-word pill on one line when Pi wraps the paragraph.
 	const { icon, word } = splitLabel(label, palette.icons);
-	const text = icon && word ? icon + ICON_SPACE + word.replace(/ /g, NBSP) : (word || label.trim()).replace(/ /g, NBSP);
+	const shown = (icon && word ? word : word || label.trim()).replace(CURRENCY, (_, before: string) => before + "\\$").replace(/ /g, NBSP);
+	const text = icon && word ? icon + ICON_SPACE + shown : shown;
 	const edges = palette.edges ?? "round";
 	const [left, right] = style.cap ? EDGE_GLYPHS[edges] : ["", ""];
 	const pad = style.cap && edges === "sharp" ? NBSP : "";
@@ -427,46 +637,75 @@ function pill(label: string, palette: Palette): string {
 
 /** Pills next to each other are separated by two spaces. */
 const PILL_GAP = /\]\] \[\[/g;
-// pi's Markdown reads "$" as the start of LaTeX math, and a later "*" makes it print the rest of the
-// line raw. Before a digit, "$" is a currency sign: escape it.
-const CURRENCY = /(^|[^\\$])\$(?=\d)/g;
-const escapeCurrency = (text: string) => text.replace(CURRENCY, (_, before: string) => before + "\\$");
 
-function decorateLine(line: string, palette: Palette, open: string, close: string): string {
-	// Odd parts are inline code spans, which stay untouched.
-	const parts = line.replace(LEAD_LABEL, (_, before: string, label: string, after: string) => before + withLabelIcon(label) + after).split(/(`+[^`]*?`+)/g);
+// pi's Markdown reads "$" as the start of LaTeX math, and a later "*" makes it print the rest of the
+// line raw. Before a digit, "$" is a currency sign: escape it, unless it opens math that pi draws.
+const CURRENCY = /(^|[^\\$])\$(?=\d)/g;
+const DOLLAR_OR_PILL = /\[\[[^\[\]\n]{1,32}\]\]|(?<![\\$])\$(?=\d)/g;
+
+/** Whether the "$" at index "at" opens inline math for pi (tokenizeInlineLatex in pi-tui's markdown.js). */
+function opensMath(text: string, at: number): boolean {
+	const escaped = (i: number) => (text.slice(0, i).match(/\\*$/)![0].length % 2 === 1);
+	let close = text.indexOf("$", at + 1);
+	while (close >= 0 && escaped(close)) close = text.indexOf("$", close + 1);
+	if (close < 0) return false;
+	const body = text.slice(at + 1, close);
+	return body !== "" && !/\s$/.test(body) && !/^\d/.test(text.slice(close + 1)) && !body.includes("\x60");
+}
+
+/** Escapes currency signs in prose, outside pills and math. */
+const escapeProse = (text: string) =>
+	text.replace(DOLLAR_OR_PILL, (m: string, at: number) => (m !== "$" || opensMath(text, at) ? m : "\\$"));
+
+const ACTION_OR_PILL = new RegExp(String.raw`\[\[[^\[\]\n]{1,32}\]\]|(\*\*)(${Object.keys(ACTION_ICONS).join("|")})(:\*\*)`, "gi");
+const withActionIcons = (text: string) =>
+	text.replace(ACTION_OR_PILL, (m: string, before?: string, word?: string, after?: string) =>
+		word === undefined ? m : before + ACTION_ICONS[word.toLowerCase()] + " " + word + after,
+	);
+
+function drawProse(line: string, literal: Range[], palette: Palette, open: string, close: string, drawn?: string[]): string {
+	const parts = partsOf(line, literal);
+	if (!parts[0].literal) parts[0].text = parts[0].text.replace(LEAD_LABEL, (_, before: string, label: string, after: string) => before + withLabelIcon(label) + after);
 	let result = "";
 	let inBold: string | undefined;
 	const reopen = () => (inBold ? `\x1b[1m${open}` : "");
-	for (let i = 0; i < parts.length; i++) {
-		const part = parts[i];
-		if (i % 2 === 1) {
+	const glyphs = (text: string) => {
+		const after = (m: string, color: Colorize) => color(m) + (inBold ? open : "");
+		if (palette.passed) text = text.replace(/[✓✔]/g, (m) => after(m, palette.passed!));
+		if (palette.failed) text = text.replace(/[✗✘]/g, (m) => after(m, palette.failed!));
+		if (palette.arrow) text = text.replace(/→/g, (m) => after(m, palette.arrow!));
+		if (palette.tree) text = text.replace(/[├└]──/g, (m) => after(m, palette.tree!));
+		return text;
+	};
+	for (const part of parts) {
+		if (part.literal) {
 			// Pi's code color ends with a foreground reset; restore the bold color after it.
-			result += inBold ? `${part}${open}` : part;
+			result += inBold ? part.text + open : part.text;
 			continue;
 		}
-		let prose = escapeCurrency(part).replace(PILL_GAP, "]]  [[");
-		prose = prose.replace(ACTION_LABEL, (_, before: string, word: string, after: string) => `${before}${ACTION_ICONS[word.toLowerCase()]} ${word}${after}`);
-		if (palette.passed) prose = prose.replace(/[✓✔]/g, (m) => palette.passed!(m) + (inBold ? open : ""));
-		if (palette.failed) prose = prose.replace(/[✗✘]/g, (m) => palette.failed!(m) + (inBold ? open : ""));
-		if (palette.arrow) prose = prose.replace(/→/g, (m) => palette.arrow!(m) + (inBold ? open : ""));
-		if (palette.tree) prose = prose.replace(/[├└]──/g, (m) => palette.tree!(m) + (inBold ? open : ""));
-		result += prose.replace(INLINE, (match, slashes: string | undefined, marker: string | undefined, label: string | undefined) => {
+		// Pills are read from the written text, before any escape or color is added around them.
+		const prose = withActionIcons(escapeProse(part.text.replace(PILL_GAP, "]]  [[")));
+		let last = 0;
+		for (const m of prose.matchAll(INLINE)) {
+			result += glyphs(prose.slice(last, m.index));
+			last = m.index + m[0].length;
+			const [match, slashes, marker, label] = m;
 			if (label !== undefined) {
-				if (!palette.pills || !label.trim()) return match;
-				return pill(label, palette) + reopen();
-			}
-			if ((slashes ?? "").length % 2 === 1) return match; // escaped marker
-			if (!inBold) {
+				if (!palette.pills || !label.trim()) result += match;
+				else {
+					drawn?.push(label);
+					result += pill(label, palette) + reopen();
+				}
+			} else if ((slashes ?? "").length % 2 === 1) result += match; // escaped marker
+			else if (!inBold) {
 				inBold = marker;
-				return `${slashes}${marker}${open}`;
-			}
-			if (inBold === marker) {
+				result += slashes + marker + open;
+			} else if (inBold === marker) {
 				inBold = undefined;
-				return `${slashes}${close}${marker}`;
-			}
-			return match;
-		});
+				result += slashes + close + marker;
+			} else result += match;
+		}
+		result += glyphs(prose.slice(last));
 	}
 	// An unclosed span (streaming or literal asterisks) ends its color at the line end.
 	if (inBold) result += close;
@@ -486,10 +725,27 @@ export const REPLY_STYLE = `The terminal draws [[Word]] as a colored pill and gi
 - After a pill, the step that resolves it, led by a bold Do:, Check:, Next:, Unblock:, Left:, Guard:, Undo: or See:.
 - Keep pills out of code, paths and commands.`;
 
+/** The escapes a palette is built from, as one string: equal keys build equal palettes. */
+export function themeKey(theme: ThemeLike, settings: EmphasisSettings): string {
+	const names = [...new Set(["success", "error", "accent", "dim", "text", settings.labels, ...Object.values(DEFAULT_SETTINGS.colors), ...Object.values(settings.colors)])];
+	const read = (get: (name: never) => string, name: string) => {
+		try {
+			return get.call(theme, name as never);
+		} catch {
+			return "";
+		}
+	};
+	return [
+		theme.getColorMode?.() ?? "",
+		...names.map((n) => read(theme.getFgAnsi, n)),
+		...["toolPendingBg", ...Object.values(LEGACY_BG)].map((n) => read(theme.getBgAnsi, n)),
+	].join("|");
+}
+
 export default function emphasis(pi: ExtensionAPI) {
 	let currentTheme: (() => ThemeLike) | undefined;
 	let settings = DEFAULT_SETTINGS;
-	let built: { theme: ThemeLike; palette: Palette } | undefined;
+	let built: { key: string; palette: Palette } | undefined;
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		currentTheme = () => ctx.ui.theme as unknown as ThemeLike;
@@ -505,9 +761,11 @@ export default function emphasis(pi: ExtensionAPI) {
 	});
 	pi.registerMarkdownTransformer((markdown, context) => {
 		if (!currentTheme || context.messageType !== "assistant") return markdown;
-		// Rebuild when the theme changes, so /theme switches recolor new output.
+		// Rebuild when the theme's colors change. Pi keeps one theme object and swaps what it holds when
+		// the Theme selector of /settings switches themes, so the key is the colors, not the object.
 		const theme = currentTheme();
-		if (built?.theme !== theme) built = { theme, palette: createPalette(theme, settings) };
+		const key = themeKey(theme, settings);
+		if (built?.key !== key) built = { key, palette: createPalette(theme, settings) };
 		return decorate(markdown, built.palette, context.isStreaming === true);
 	});
 }

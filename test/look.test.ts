@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_SETTINGS, countLine, createPalette, decorate, readSettings, type EmphasisSettings, type ThemeLike } from "../index.ts";
+import emphasis, { DEFAULT_SETTINGS, countLine, createPalette, decorate, readSettings, type EmphasisSettings, type ThemeLike } from "../index.ts";
 
 // A truecolor theme with tokyonight's values (themes/tokyonight.json), so escapes carry RGB.
 const RGB: Record<string, [number, number, number]> = {
@@ -143,4 +143,28 @@ describe("readSettings", () => {
 		expect(s.fill.success).toBe("text");
 		expect(s.fill.ask).toBe("solid");
 	});
+});
+
+describe("theme switch", () => {
+	// Pi keeps one theme object and swaps what it holds when /settings selects another theme.
+	test("after a theme change the next draw uses the new theme's pill colors", () => {
+		const other: ThemeLike = { ...truecolor, getFgAnsi: (name: never) => (name === "success" ? "\x1b[38;2;1;200;3m" : fgEsc(name)) };
+		let current = truecolor;
+		const proxy = new Proxy({}, { get: (_, key) => (current as unknown as Record<string | symbol, unknown>)[key] }) as ThemeLike;
+		const handlers: Record<string, (event: unknown, ctx: unknown) => void> = {};
+		let transform: ((md: string, ctx: { messageType: string; isStreaming?: boolean }) => string) | undefined;
+		emphasis({ on: (name: string, h: never) => (handlers[name] = h), registerMarkdownTransformer: (t: never) => (transform = t), getSettings: () => ({}) } as never);
+		handlers.session_start({}, { mode: "tui", ui: { theme: proxy } });
+		const ctx = { messageType: "assistant", isStreaming: false };
+		expect(transform!("[[Done]]", ctx)).toBe(decorate("[[Done]]", createPalette(truecolor)));
+		current = other;
+		expect(transform!("[[Done]]", ctx)).toBe(decorate("[[Done]]", createPalette(other)));
+		expect(transform!("[[Done]]", ctx)).toContain("\x1b[38;2;1;200;3m");
+	});
+});
+
+describe("literal text", () => {
+	test("inline code in a heading reaches pi unchanged", () => expect(draw("## Price key: \`$5\`")).toBe("## Price key: \`$5\`"));
+	test("valid math such as $2^3$ reaches pi unchanged", () => expect(draw("Value $2^3$ here")).toBe("Value $2^3$ here"));
+	test("a currency sign next to math is still escaped", () => expect(draw("costs $5 and $2^3$")).toContain("costs \\$5 and"));
 });
