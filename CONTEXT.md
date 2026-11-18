@@ -4,29 +4,38 @@ Pi Emphasis changes how an assistant reply is drawn in Pi's terminal. It never c
 
 ## Glossary
 
-- **Pill**: `[[Word]]` in a reply, drawn as a rounded chip. Its color and icon come from its word.
+- **Pill**: `[[Word]]` in a reply, drawn as a chip. Its tone and icon come from its word.
 - **Word**: the known term a pill starts with, such as Done or Needs you. Matching ignores case and extra spaces.
 - **Detail**: text after the word inside the same pill, such as the "12/12" in "Passed 12/12".
-- **Tone**: the color group a word belongs to: error, warning, success, danger, mode, owner, or neutral for any unknown word.
+- **Tone**: the color group a word belongs to: error, ask, warning, success, danger, mode, owner, or neutral for any unknown word. Ask holds Needs you and Decision.
+- **State pill**: a pill of tone ask, error, warning or success. Only state pills are counted.
+- **Count line**: a line of one pill per state word with its count, drawn under the first paragraph of a reply with 5 or more state pills of at least 2 words.
+- **Fill**: how a tone fills its pill: panel (the tone color tinted into the theme's toolPendingBg), solid (the tone color as background) or text (no background).
+- **Edges**: the ends of a pill: round (Powerline caps), half (half blocks) or sharp (a filled space).
+- **Icon set**: filled or outline Material Design circles of one size, or none. Each word maps to an icon group, and the set gives each group its glyph.
 - **Synonym**: a word that is displayed as another word, so one state always reads the same (Completed is shown as Done).
-- **Label**: a `##` heading, or bold text that opens a line or list item. A known label takes an icon.
+- **Label**: a `##` heading, or bold text that opens a line or list item, also after a kind-of-work pill. A known label takes an icon.
 - **Lead-in**: a bold word ending in a colon that introduces the action a pill calls for, such as "Check:".
+- **Settings**: the optional `emphasis` block of pi's settings.json, read once per session start.
 - **Reply guidance**: the rules added to the system prompt as the `reply_style` section, in the terminal interface only.
-- **Palette**: the colors taken from the current Pi theme. It is rebuilt when the theme changes.
+- **Palette**: the colors built from the current Pi theme and the settings. It is rebuilt when the theme changes.
 
 ## Rules and where each lives
 
-All rules live in `index.ts` and are tested in `test/emphasis.test.ts` and `test/reply-style.test.ts` without Pi running.
+All rules live in `index.ts` and are tested in `test/` without Pi running: `emphasis.test.ts` (words, pills, labels), `look.test.ts` (colors, edges, icons, count line, settings), `reply-style.test.ts` (the prompt section and its words) and `properties.test.ts` (Hegel property tests).
 
-- Which tone a word has, and which words agents are told to write: `VOCABULARY` (`core` is taught, `also` is only accepted), read by `toneOf`.
-- Which icon a pill word has: `PILL_ICONS`.
+- Which tone a word has, and which words exist: `VOCABULARY` (`core` are the defining words, `also` are accepted too), read by `toneOf`.
+- Which icon a pill word has: `WORD_ICON` gives its group, `ICON_SETS` gives the group's glyph.
 - Which words are synonyms: `SYNONYMS`.
 - Which labels take an icon: `LABEL_ICONS`, applied by `withLabelIcon`.
 - Which lead-in words take an icon after a pill: `ACTION_ICONS`.
+- What the settings may hold and their defaults: `readSettings` and `DEFAULT_SETTINGS`; docs/configuration.md describes them for people.
+- How a tone becomes escapes: `createPalette` (`PANEL_MIX`, the contrast pick for solid pills, the 256-color fallback).
+- When and where the count line appears: `countLine` and `COUNT_LINE_MIN`.
 - What the agent is told: `REPLY_STYLE`, fixed text; `test/reply-style.test.ts` checks that each word it names is in the tables above.
 - How a pill label splits into icon, word and detail: `splitLabel`.
 - What is left untouched (fenced code, inline code, escaped markers): `decorate` and `decorateLine`.
 
 ## Border
 
-Pi hands the extension an assistant message's Markdown and the current theme. The extension returns Markdown with terminal color codes added. Before each run in the terminal interface, the extension also hands Pi the reply guidance as one prompt section. Nothing else crosses.
+Pi hands the extension an assistant message's Markdown, whether the message is still streaming, the current theme and the merged settings. The extension returns Markdown with terminal color codes added. Before each run in the terminal interface, the extension also hands Pi the reply guidance as one prompt section. Nothing else crosses.

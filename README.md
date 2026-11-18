@@ -2,10 +2,12 @@
 
 ## This fork
 
-This is a fork of [pi-emphasis](https://github.com/johnlindquist/pi-emphasis) by John Lindquist, at commit `f884b73`. The drawing (pills, colors, icons, labels, lead-ins) is upstream's. It differs in two ways:
+This is a fork of [pi-emphasis](https://github.com/johnlindquist/pi-emphasis) by John Lindquist, at commit `f884b73`. The drawing code (pills, labels, lead-ins, marks, trees) comes from upstream. The fork differs in four ways:
 
-- **Compact rules.** The `reply_style` prompt section is a short tested rule set of about 290 tokens, in place of upstream's long guidance of about 2,400 tokens. It teaches 9 labels, 11 pill words and 5 lead-ins. The rules are the `REPLY_STYLE` constant in [`index.ts`](index.ts).
-- **No switches.** The four `PI_EMPHASIS_*` environment variables are gone. The rules are always on in the terminal interface, pills have rounded ends and icons, and bold takes the `mdLink` color.
+- **Compact rules.** The `reply_style` prompt section is a short tested rule set of 358 tokens, in place of upstream's guidance of 2,419 tokens. In a test with the same prompts, it gave the same reply shape as upstream's guidance: a kind-of-work pill, `##` sections, and a pill right after each subject. The rules are the `REPLY_STYLE` constant in [`index.ts`](index.ts).
+- **A new look.** Pill colors come from the current pi theme. All icons are circles of one size. Needs you and Decision are solid yellow, so they stand apart from status pills. A count line of the reply's pills appears under the first paragraph. [DESIGN.md](DESIGN.md) records each decision.
+- **Settings.** An optional `emphasis` block in pi's `settings.json` sets the pill ends, the icons, the label color, and the color and fill of each tone. See [docs/configuration.md](docs/configuration.md).
+- **No environment switches.** The four `PI_EMPHASIS_*` environment variables are gone. The rules are always on in the terminal interface.
 
 Sync with upstream: the remote `upstream` points at the original repository.
 
@@ -57,10 +59,10 @@ Then run `/reload` in Pi, or start Pi again.
 **1. Check whether your terminal already draws the symbols.** Paste this into your shell:
 
 ```sh
-printf '\ue0b6\uf00c \uf128 \uf007\ue0b4\n'
+printf '\ue0b6\U000f05e0 \U000f02d7 \U000f0009\ue0b4\n'
 ```
 
-You should see a half circle, a check mark, a question mark, a person and another half circle. If you do, skip to step 3. Ghostty, kitty and WezTerm include these symbols, so they usually pass with any font.
+You should see a half circle, a check mark in a circle, a question mark in a circle, a person in a circle and another half circle. If you do, skip to step 3. Ghostty, kitty and WezTerm include these symbols, so they usually pass with any font.
 
 **2. If you see boxes, install a Nerd Font and select it.** On macOS with Homebrew:
 
@@ -83,20 +85,21 @@ To keep your current font, install only the symbols with `brew install --cask fo
 
 > Reply with one line that uses the pills [[Done]], [[Needs you]], [[Failed]] and [[Costs money]].
 
-You should see four rounded pills in green, yellow, soft red and solid red, each with an icon.
+You should see four rounded pills, each with an icon: Done on a green panel, Needs you in solid yellow, Failed on a red panel and Costs money in solid red.
 
-**No Nerd Font?** This fork always draws icons and rounded ends; it has no switch to turn them off. Install a Nerd Font or the symbols-only font above.
+**No Nerd Font?** Set `"icons": "none"` and `"edges": "half"` or `"sharp"` in the `emphasis` settings ([docs/configuration.md](docs/configuration.md)). Half blocks are standard Unicode characters, so every terminal font draws them.
 
 ## The rules come with it
 
 An agent writes pills only when it is told how. In Pi's terminal interface the extension adds a `reply_style` section to the system prompt on every run, so there is nothing to paste into an `AGENTS.md`. The section tells the agent:
 
-- to open every reply, and each subject of a long reply, with a bold label: Result, Status, Cause, Fix, Risk, Next, Plan, Evidence, Decision
-- to put a pill beside the subject whose state it names, with only these words: Done, Passed, Fixed, Failed, Blocked, In progress, Unverified, Needs you, Decision, Destructive, Costs money
-- to follow every pill except Done, Passed and Fixed with the one step that resolves it, led by a bold Do:, Check:, Next:, Unblock: or Undo:
+- to open with a bold label such as **Result:**, and to put a kind-of-work pill first when the reply has several subjects: Brainstorm, Investigate, Preview, Implement or Qualify
+- to give a long reply a `##` heading per group, and to write each bullet as **Subject** [[Pill]] text
+- to use these pill words: Done, Passed, Fixed, Observed, Recommended, Failed, Blocked, Partial, In progress, Unverified, At risk, Needs you, Decision, Destructive, Costs money, Shared
+- to follow a pill with the step that resolves it, led by a bold Do:, Check:, Next:, Unblock:, Left:, Guard:, Undo: or See:
 - to keep pills out of code, paths and commands
 
-The section is fixed text. A test checks that every label, pill word and lead-in it names gets its color and icon, so the rules and the drawing cannot drift apart. It adds about 290 tokens to the prompt. Print, JSON and RPC runs do not get the section, since nothing there draws pills.
+The section is fixed text. A test checks that every kind, pill word and lead-in it names gets its color and icon, so the rules and the drawing cannot drift apart. It adds 358 tokens to the prompt, measured on claude-opus-5-5. Print, JSON and RPC runs do not get the section, since nothing there draws pills.
 
 ## Pills
 
@@ -104,34 +107,50 @@ Write `[[Word]]` beside the thing it describes. The word decides the color and t
 
 ![Every pill word, grouped by color](screenshots/vocabulary.png)
 
-| Color | Meaning | Words |
-|---|---|---|
-| Red | Something is wrong | Failed, Blocked, Broken, Unsafe, Rejected, Down |
-| Yellow | Look here | Needs you, Decision, Unverified, Partial, Skipped, In progress, Pending, At risk, Review, Todo, Stale, Draft |
-| Green | Settled | Done, Passed, Observed, Fixed, Live, Recommended, Keep, Ready, Merged, Safe, Verified, Shipped, Approved, Healthy |
-| Solid red | Consequences | Costs money, Destructive, Irreversible |
-| Cyan | Kind of work | Brainstorm, Investigate, Preview, Implement, Qualify |
-| Solid blue | Ownership | Owned, Shared, Foreign |
-| Soft blue | Context | Inferred, New, Changed, Optional, and any other label |
+| Color (default) | Tone | Meaning | Words |
+|---|---|---|---|
+| Red panel | error | Something is wrong | Failed, Blocked, Broken, Unsafe, Rejected, Down |
+| Solid yellow | ask | Only you can act | Needs you, Decision |
+| Yellow panel | warning | Look here | Unverified, Partial, Skipped, In progress, Pending, At risk, Review, Todo, Stale, Draft |
+| Green panel | success | Settled | Done, Passed, Observed, Fixed, Live, Recommended, Keep, Ready, Merged, Safe, Verified, Shipped, Approved, Healthy |
+| Solid red | danger | Consequences | Costs money, Destructive, Irreversible |
+| Accent panel | mode | Kind of work | Brainstorm, Investigate, Preview, Implement, Qualify |
+| Purple panel | owner | Ownership | Owned, Shared, Foreign |
+| Grey panel | neutral | Context | Inferred, New, Changed, Optional, and any other label |
+
+The colors come from the current pi theme, so `/theme` recolors the pills. [docs/configuration.md](docs/configuration.md) explains how to change the color, fill, ends and icons.
 
 - **Detail.** A known word may be followed by detail: `[[Passed 12/12]]`, `[[Failed: 3 tests]]`, `[[In progress 40%]]`.
 - **Synonyms.** Completed, Complete, OK and Finished display as Done. Fail, Failing and Error display as Failed. Pass displays as Passed, Waiting as Pending, and Needs review as Review.
 - **Your own icon.** A label that starts with a Nerd Font glyph keeps that glyph.
 - **Length.** A label can be up to 32 characters. Longer ones are left as typed.
+- **Count line.** When a reply has 5 or more state pills of at least 2 words, a line under its first paragraph shows one pill per word with its count, asks first: [[Needs you 1]] [[Partial 1]] [[Done 4]]. The line appears when the reply is complete. A reply that already has a line of only pills gets no count line.
 
 ## Labels and shapes
 
-- **Headings and lead labels.** A `##` heading, or bold text at the start of a line or list item, takes an icon when it is one of: Finding, Result, Status, Evidence, Cause, Effect, Fix, Risk, Limits, Cost, Decision, Options, Plan, Next, Why, How, Rule, Example, Checked, Verdict, Rollback, Undo, Review, Scoreboard, Terminal, Folder, File, Branch, Ideas, Pills, Colors, Icons. A trailing colon is fine.
+- **Headings and lead labels.** A `##` heading, or bold text at the start of a line or list item (also after a kind-of-work pill), takes an icon when it is one of: Finding, Result, Status, Evidence, Cause, Effect, Fix, Risk, Limits, Cost, Decision, Options, Plan, Next, Why, How, Rule, Example, Checked, Verdict, Rollback, Undo, Review, Scoreboard, Terminal, Folder, File, Branch, Ideas, Pills, Colors, Icons. A trailing colon is fine.
 - **Action lead-ins.** Bold **Check:**, **Do:**, **Next:**, **Unblock:**, **Left:**, **Run:**, **Guard:**, **Undo:** and **See:** take an icon anywhere in a line, so the action that follows a pill is easy to find: `[[Unverified]] the red pills on your screen. **Check:** run /reload.` The colon is required.
-- **Bold.** `**anchor term**` keeps its weight and takes the theme's link color.
+- **Bold.** `**anchor term**` keeps its weight and takes the label color: the theme's link color `mdLink` (blue in tokyonight), or the color in the `labels` setting.
 - **Marks.** `✓` takes the success color, `✗` the error color, and `→` the accent color.
 - **Trees.** `├──` and `└──` are dimmed so the content stands out.
 
-Your own messages, inline code, fenced code and escaped asterisks are left alone.
+Your own messages, inline code, fenced code and escaped asterisks are left alone. A `$` before a digit is drawn escaped, because pi's Markdown reads `$` as the start of LaTeX math and then prints the rest of the line as typed.
 
 ## Settings
 
-This fork has no settings. Bold takes the theme's `mdLink` color, pills have rounded ends and icons, and the rules are always added in the terminal interface.
+Put an optional `emphasis` block in pi's `settings.json`, then run `/reload`. [docs/configuration.md](docs/configuration.md) describes each field, its values and its default.
+
+| Field | Values | Default |
+|---|---|---|
+| `edges` | `round`, `half`, `sharp` | `round` |
+| `icons` | `filled`, `outline`, `none` | `filled` |
+| `labels` | a pi theme color name or `#rrggbb` | `mdLink` |
+| `colors.<tone>` | a pi theme color name or `#rrggbb` | the theme's success, error, warning, accent and other colors |
+| `fill.<tone>` | `panel`, `solid`, `text` | `solid` for ask and danger, `panel` for the rest |
+
+```json
+{ "emphasis": { "edges": "sharp", "icons": "outline", "labels": "mdHeading", "colors": { "ask": "#ff966c" } } }
+```
 
 To add a word, an icon or a synonym, edit the tables at the top of [`index.ts`](index.ts). The rules are the `REPLY_STYLE` constant in the same file.
 
@@ -141,9 +160,10 @@ To add a word, an icon or a synonym, edit the tables at the top of [`index.ts`](
 |---|---|---|
 | `[[Done]]` as plain text | The extension is not loaded | Run `/reload`. Check that `pi list` shows pi-emphasis |
 | Boxes or question marks in or around pills | The terminal has no Nerd Font symbols | [Set up your terminal](#set-up-your-terminal) |
-| Icons that overlap the next letter | The font draws its icons two cells wide | Use the "Mono" variant of the Nerd Font, such as JetBrainsMono Nerd Font Mono |
-| Pills that are all one color, in reverse video | Pi's theme has no panel colors, which happens with the `system` theme when the terminal reports none | Choose a theme with `/theme`, such as `dark` |
-| Solid red, cyan or blue pills in odd shades | Those three use your terminal's own colors | Change the terminal's color theme |
+| Icons that overlap the next letter | The font draws its icons wider than one cell | Use the "Mono" variant of the Nerd Font, such as JetBrainsMono Nerd Font Mono. Its icons are smaller |
+| Small icons | A "Mono" Nerd Font puts every icon in one cell | Use the font's non-Mono variant. In Ghostty, `font-codepoint-map` can take only the icons from it |
+| Pills that are all one color, in reverse video | The terminal draws no truecolor, or pi's theme has no panel colors (the `system` theme when the terminal reports none) | Choose a theme with `/theme`, such as `dark`, in a truecolor terminal |
+| Pills in colors you do not want | The colors come from the pi theme | Set `colors` and `fill` in the [settings](docs/configuration.md) |
 | Bold that looks no heavier than normal text | The terminal draws normal text at a medium weight, or its font has no real bold | Choose a font with a distinct bold. In Ghostty, `font-style-bold` selects a heavier face |
 | The agent writes no pills | The rules reach the agent only in Pi's terminal interface | Use the terminal interface. Print, JSON and RPC runs never get the rules |
 | Pills inside code blocks stay as typed | Code is left alone on purpose | Nothing to fix |
@@ -157,7 +177,7 @@ To add a word, an icon or a synonym, edit the tables at the top of [`index.ts`](
 
 ```sh
 bun install
-bun run check                # types and tests
+bun run check                # types and tests, including Hegel property tests
 python3 demo/shots.py        # redraw the demo replies in a real Pi session, as HTML to screenshot
 ```
 

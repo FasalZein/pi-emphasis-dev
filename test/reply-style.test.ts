@@ -1,13 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import register, { toneOf } from "../index.ts";
 
-// The tested rules, rules-b2.txt of the reply-style evaluation (289 tokens). Pi renders a section as
-// "<name>\n" + content + "\n</name>" (dist/core/system-prompt.js).
-const RULES_B2 = `<reply_style>
+// The tested rules: rule set c3 of the 2026-11-18 evaluation (358 tokens, DESIGN.md). Pi renders a
+// section as "<name>\n" + content + "\n</name>" (dist/core/system-prompt.js).
+const RULES_C3 = `<reply_style>
 The terminal draws [[Word]] as a colored pill and gives a bold lead label an icon.
-- Label: open every reply, and each subject of a long reply, with a bold label: Result, Status, Cause, Fix, Risk, Next, Plan, Evidence, Decision.
-- Pill: put one beside the subject whose state it names, with only these words: [[Done]] [[Passed]] [[Fixed]] [[Failed]] [[Blocked]] [[In progress]] [[Unverified]] [[Needs you]] [[Decision]] [[Destructive]] [[Costs money]].
-- Action: follow every pill except Done, Passed and Fixed with the one step that resolves it, led by a bold Do:, Check:, Next:, Unblock: or Undo:.
+- Open with a bold label: **Result:** ... When the reply has several subjects, put a kind-of-work pill first: [[Implement]] **Result:** ... Kinds: Brainstorm, Investigate, Preview, Implement, Qualify.
+- Long reply: a ## heading per group; each bullet **Subject** [[Pill]] text.
+- Pills: [[Done]] [[Passed]] [[Fixed]] [[Observed]] [[Recommended]] [[Failed]] [[Blocked]] [[Partial]] [[In progress]] [[Unverified]] [[At risk]] [[Needs you]] [[Decision]] [[Destructive]] [[Costs money]] [[Shared]].
+- After a pill, the step that resolves it, led by a bold Do:, Check:, Next:, Unblock:, Left:, Guard:, Undo: or See:.
 - Keep pills out of code, paths and commands.
 </reply_style>`;
 
@@ -25,12 +26,13 @@ const theme = {
 };
 
 // Stand-in pi API: records on() handlers and the markdown transformer of the real entry.
-function load(mode: string) {
+function load(mode: string, settings: Record<string, unknown> = {}) {
 	const handlers: Record<string, Handler[]> = {};
 	let transform: Transformer | undefined;
 	register({
 		on: (name: string, h: Handler) => (handlers[name] ??= []).push(h),
 		registerMarkdownTransformer: (t: Transformer) => (transform = t),
+		getSettings: () => settings,
 	} as never);
 	for (const h of handlers.session_start ?? []) h({}, { mode, ui: { theme } });
 	return {
@@ -43,13 +45,13 @@ function load(mode: string) {
 	};
 }
 
-const ICON = /[\ue000-\uf8ff]/u;
+const ICON = /(?:[\ue000-\uf8ff]|[\u{f0000}-\u{ffffd}])/u;
 
 describe("reply_style prompt section", () => {
 	test("terminal mode adds exactly the tested rules as the reply_style section", () => {
 		const sections = load("tui").sections();
 		expect(Object.keys(sections)).toEqual(["reply_style"]);
-		expect(`<reply_style>\n${sections.reply_style}\n</reply_style>`).toBe(RULES_B2);
+		expect(`<reply_style>\n${sections.reply_style}\n</reply_style>`).toBe(RULES_C3);
 	});
 
 	test.each(["print", "json", "rpc"])("%s mode adds no prompt section and draws nothing", (mode) => {
@@ -60,23 +62,31 @@ describe("reply_style prompt section", () => {
 });
 
 // The words the rules teach, read from the rules text itself.
-const labels = RULES_B2.match(/bold label: ([^.]+)\./)![1].split(", ");
-const pillWords = [...RULES_B2.matchAll(/\[\[([^\]]+)\]\]/g)].map((m) => m[1]).filter((w) => w !== "Word");
-const leadIns = [...RULES_B2.match(/led by a bold (.+)\./)![1].matchAll(/(\w+):/g)].map((m) => m[1]);
+const label = RULES_C3.match(/bold label: \*\*(\w+):\*\*/)![1];
+const kinds = RULES_C3.match(/Kinds: ([^.]+)\./)![1].split(", ");
+const pillWords = [...RULES_C3.match(/- Pills: (.+)\./)![1].matchAll(/\[\[([^\]]+)\]\]/g)].map((m) => m[1]);
+const leadIns = [...RULES_C3.match(/led by a bold (.+)\./)![1].matchAll(/(\w+):/g)].map((m) => m[1]);
 
 describe("every word the rules teach is drawn", () => {
-	test("the rules text names 9 labels, 11 pills and 5 lead-ins", () => {
-		expect(labels.length).toBe(9);
-		expect(pillWords.length).toBe(11);
-		expect(leadIns).toEqual(["Do", "Check", "Next", "Unblock", "Undo"]);
+	test("the rules text names 1 label, 5 kinds, 16 pills and 8 lead-ins", () => {
+		expect(label).toBe("Result");
+		expect(kinds).toEqual(["Brainstorm", "Investigate", "Preview", "Implement", "Qualify"]);
+		expect(pillWords.length).toBe(16);
+		expect(leadIns).toEqual(["Do", "Check", "Next", "Unblock", "Left", "Guard", "Undo", "See"]);
 	});
 
-	test("every label of the rules gets an icon as a line's lead label", () => {
+	test("the label gets an icon as a line's lead label, also after a kind-of-work pill", () => {
 		const ext = load("tui");
-		for (const label of labels) {
-			// No colon: with one, a lead-in word (Next) would get its icon from the lead-in table and hide a lost label entry.
-			const out = ext.draw(`**${label}** text`);
-			expect(out).toMatch(new RegExp(`^\\*\\*[\\s\\S]*${ICON.source} ${label}[^:]*\\*\\*`, "u"));
+		// No colon: with one, a lead-in word would get its icon from the lead-in table and hide a lost label entry.
+		expect(ext.draw(`**${label}** text`)).toMatch(new RegExp(`^\\*\\*[\\s\\S]*${ICON.source} ${label}[^:]*\\*\\*`, "u"));
+		expect(ext.draw(`[[Implement]] **${label}:** text`)).toMatch(new RegExp(`${ICON.source} ${label}:`, "u"));
+	});
+
+	test("every kind of work is a mode pill with an icon", () => {
+		const ext = load("tui");
+		for (const kind of kinds) {
+			expect(toneOf(kind)).toBe("mode");
+			expect(ext.draw(`x [[${kind}]]`)).toMatch(new RegExp(`${ICON.source}\u00a0${kind}`, "u"));
 		}
 	});
 
@@ -96,5 +106,22 @@ describe("every word the rules teach is drawn", () => {
 			const out = ext.draw(`x [[Blocked]] **${word}:** step`);
 			expect(out).toMatch(new RegExp(`${ICON.source} ${word}:`, "u"));
 		}
+	});
+});
+
+describe("the emphasis settings block reaches the drawing", () => {
+	test("icons none draws pills without icons", () => {
+		// The rounded caps are Private Use Area glyphs too; pill icons live in the supplementary area.
+		expect(load("tui", { emphasis: { icons: "none" } }).draw("x [[Done]]")).not.toMatch(/[\u{f0000}-\u{ffffd}]/u);
+	});
+	test("edges sharp draws no rounded caps", () => {
+		const out = load("tui", { emphasis: { edges: "sharp" } }).draw("x [[Done]]");
+		expect(out).not.toMatch(/[\ue0b4\ue0b6]/);
+		expect(out).toContain("\u00a0\u{f05e0}\u00a0Done\u00a0");
+	});
+	test("no settings block draws rounded caps and filled icons", () => {
+		const out = load("tui").draw("x [[Done]]");
+		expect(out).toMatch(/\ue0b6/);
+		expect(out).toContain("\u{f05e0}\u00a0Done");
 	});
 });

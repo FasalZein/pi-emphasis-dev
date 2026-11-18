@@ -12,12 +12,12 @@ const plain = (text: string) => decorate(text, palette).replace(/\x1b\[[0-9;a-zA
 
 describe("pill tone", () => {
 	test.each([
-		["Failed", "error"], ["Blocked", "error"], ["Needs you", "warning"], ["Decision", "warning"],
+		["Failed", "error"], ["Blocked", "error"], ["Needs you", "ask"], ["Decision", "ask"], ["Unverified", "warning"],
 		["Done", "success"], ["Observed", "success"], ["Costs money", "danger"], ["Irreversible", "danger"],
 		["Implement", "mode"], ["Shared", "owner"], ["Inferred", "neutral"], ["Anything else", "neutral"],
 	])("%s is %s", (word, tone) => expect(toneOf(word)).toBe(tone as never));
 
-	test("case and spacing do not matter", () => expect(toneOf("  needs   YOU ")).toBe("warning"));
+	test("case and spacing do not matter", () => expect(toneOf("  needs   YOU ")).toBe("ask"));
 	test("a known word may carry detail", () => {
 		expect(toneOf("Passed 12/12")).toBe("success");
 		expect(toneOf("Failed: 3 tests")).toBe("error");
@@ -29,11 +29,11 @@ describe("pill tone", () => {
 });
 
 describe("pills", () => {
-	test("a known word gets its icon", () => expect(plain("[[Done]]")).toBe("|\uf00c Done|"));
+	test("a known word gets its icon", () => expect(plain("[[Done]]")).toBe("|\u{f05e0} Done|"));
 	test("an unknown word has no icon", () => expect(plain("[[Anything else]]")).toBe("|Anything else|"));
 	test("synonyms display as one word and keep their detail", () => {
-		expect(plain("[[Completed]]")).toBe("|\uf00c Done|");
-		expect(plain("[[Fail: 3 tests]]")).toBe("|\uf00d Failed: 3 tests|");
+		expect(plain("[[Completed]]")).toBe("|\u{f05e0} Done|");
+		expect(plain("[[Fail: 3 tests]]")).toBe("|\u{f0159} Failed: 3 tests|");
 	});
 	test("a label's own glyph wins over the table's", () => expect(plain("[[\uf0e7 Done]]")).toBe("|\uf0e7 Done|"));
 	test("labels over 32 characters are left alone", () => {
@@ -55,7 +55,7 @@ describe("labels", () => {
 
 describe("action lead-ins", () => {
 	test("take an icon anywhere in a line when they end in a colon", () => {
-		expect(plain("[[Unverified]] red pills. **Check:** run it")).toBe("|\uf128 Unverified| red pills. **<mdLink>\uf046 Check:</>** run it");
+		expect(plain("[[Unverified]] red pills. **Check:** run it")).toBe("|\u{f07c3} Unverified| red pills. **<mdLink>\uf046 Check:</>** run it");
 		expect(plain("- **Unblock:** access")).toBe("- **<mdLink>\uf09c Unblock:</>** access");
 	});
 	test("get exactly one icon at the start of a line", () => expect(plain("**Next:** go")).toBe("**<mdLink>\uf061 Next:</>** go"));
