@@ -383,26 +383,81 @@ MATH.push(
 	"The **price** and $[[Done p0q]]$ now",
 );
 
-// The reviewer's probe: where the reader and pi still differ, the reader draws (as on c675de2); it never
-// hides a pill that pi shows as prose.
-const PROBE = [
-	"~~~\nx\n~~~\n$$\n[[Done p0q]]\n$$", "$x$\n$$\n[[Done p0q]]\n$$", "- $a$\n\nTop $[[Done p0q]]$ now", "<https://example.org> and $[[Done p0q]]$",
-	"text \\(pending\n## x $[[Done p0q]]$", "\\\\[x\n\nTop $[[Done p0q]]$ now", "# $a$\n\nTop $[[Done p0q]]$ now", "\\[[[Done p0q]]\\] tail",
-	"$[[Done p0q]]$ tail", "text\n$[[Done p0q]]$ tail", "a$[[Done p0q]]$\n\nTop $[[Done p1q]]$ now", "See [the $[[Done p0q]]$](ref)",
-	"Top \\(abc\na | b\n--- | ---\n$[[Done p0q]]$ | row", "----\n$$\n[[Done p0q]]\n$$", "> $$\n> x\n> $$\n\nTop $[[Done p0q]]$ now",
-	"Intro\n\n$$\n$$\n\nTop $[[Done p0q]]$ now", "test $3\n[[Done p0q]] $4",
+// The reviewer's probes (review rounds 1 and 2), inputs as written in
+// ~/.pi/artifacts/reviewer/reader-oracle/probe.ts plus the "$$" forms of round 2. Each pill is checked in both
+// directions: the reader leaves it outside literal ranges exactly when pi shows it as prose (test/oracle.ts),
+// except for a documented limit (DESIGN.md), where the documented reader result is asserted instead.
+const LIMIT = {
+	autolink: "math after an autolink is drawn as prose",
+	linkText: "math in link text is drawn as prose",
+	tableAfterPending: "math in a table after a pending \\( is drawn as prose",
+} as const;
+const PROBES: [md: string, limits?: Record<string, keyof typeof LIMIT>][] = [
+	["See [cost $5](https://example.org) and [[Done p0q]] end$"],
+	["The **price $5** and [[Done p0q]] end$"],
+	["Press <span title=\"$5\">OK</span> [[Done p0q]] end$"],
+	["~~~\nx\n~~~\n$\n[[Done p0q]]\n$"],
+	["$x$\n$\n[[Done p0q]]\n$"],
+	["- $a$\n\nTop $[[Done p0q]]$ now"],
+	["<https://example.org> and $[[Done p0q]]$", { p0q: "autolink" }],
+	["text \\(pending\n## x $[[Done p0q]]$"],
+	["\\\\[x\n\nTop $[[Done p0q]]$ now"],
+	["# $a$\n\nTop $[[Done p0q]]$ now"],
+	["\\[[[Done p0q]]\\] tail"],
+	["$[[Done p0q]]$ tail"],
+	["text\n$[[Done p0q]]$ tail"],
+	["a$[[Done p0q]]$\n\nTop $[[Done p1q]]$ now"],
+	["See [the $[[Done p0q]]$](ref)", { p0q: "linkText" }],
+	["Top \\(abc\na | b\n--- | ---\n$[[Done p0q]]$ | row", { p0q: "tableAfterPending" }],
+	["----\n$\n[[Done p0q]]\n$"],
+	["> $\n> x\n> $\n\nTop $[[Done p0q]]$ now"],
+	["See **cost $5** [[Done p0q]] end$ \u0060[[Done p1q]]\u0060"],
+	["$\r\n[[Done p0q]]\r\n$\r\n"],
+	["Intro\n\n$\n$\n\nTop $[[Done p0q]]$ now"],
+	["test $3\n[[Done p0q]] $4"],
+	// Round 2: closed top-level math right after a block that ends (fence, thematic break, quote).
+	["~~~\nx\n~~~\n$$\n[[Done p0q]]\n$$\n\n[[Done p1q]]"],
+	["\u0060\u0060\u0060\nx\n\u0060\u0060\u0060\nTop $[[Done p0q]]$ now [[Done p1q]]"],
+	["----\n$$\n[[Done p0q]]\n$$\n\n[[Done p1q]]"],
+	["***\n\\[\n[[Done p0q]]\n\\]"],
+	["> $$\n> x\n> $$\n\nTop $[[Done p0q]]$ now [[Done p1q]]"],
+	["> $$ x\n\nTop $[[Done p0q]]$ now"],
+	["- $$ x\n\nTop $[[Done p0q]]$ now"],
+	// Round 2 differential find: a math block line cuts the paragraph, so the "$$" before it stays pending.
+	["[[Done p0q]] $$\nx $[[Done p1q]]$ y\n$$ [[Done p2q]]"],
 ];
-for (const md of PROBE) {
-	test("review probe: the block reader never hides a pill pi shows as prose in " + JSON.stringify(md), () => {
+/** Pill id to whether the reader leaves it outside literal ranges in a prose or heading line. */
+function readerProse(md: string): Map<string, boolean> {
+	const lines = md.split("\n");
+	const read = readMarkdown(lines);
+	const out = new Map<string, boolean>();
+	lines.forEach((line, i) => {
+		for (const m of line.matchAll(PILL)) {
+			const prose = (read[i].kind === "prose" || read[i].kind === "heading") && !read[i].literal.some(([s, e]) => m.index < e && m.index + m[0].length > s);
+			out.set(m[1].split(" ")[1], prose);
+		}
+	});
+	return out;
+}
+for (const [md, limits = {}] of PROBES) {
+	test("review probe: per pill, the block reader equals pi or its documented limit in " + JSON.stringify(md), () => {
+		expect.hasAssertions();
 		const ids = [...md.matchAll(/p\d+q/g)].map((m) => m[0]);
-		const drawn = new Set(prosePills(md).map((p) => p.split(" ")[1]));
 		const shown = piShown(md, ids);
-		for (let k = 0; k < ids.length; k++) if (shown[k]) expect(drawn.has(ids[k])).toBe(true);
+		const reader = readerProse(md);
+		ids.forEach((id, k) => {
+			const limit = limits[id];
+			// A documented limit: pi shows math, the reader leaves the pill as prose.
+			if (limit) {
+				expect([id, LIMIT[limit], shown[k]]).toEqual([id, LIMIT[limit], false]);
+				expect([id, LIMIT[limit], reader.get(id)]).toEqual([id, LIMIT[limit], true]);
+			} else expect([id, reader.get(id)]).toEqual([id, shown[k]]);
+		});
 	});
 }
 
 for (const md of MATH) {
-	test("math: the block reader draws exactly the pills pi shows as prose in " + JSON.stringify(md), () => {
+	test("math: the block reader leaves outside literal ranges exactly the pills pi shows as prose in " + JSON.stringify(md), () => {
 		const ids = [...md.matchAll(/p\d+q/g)].map((m) => m[0]);
 		const lines = md.split("\n");
 		const read = readMarkdown(lines);

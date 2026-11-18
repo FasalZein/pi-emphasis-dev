@@ -91,6 +91,8 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 	// Math is read only at top level: in a quote or a list item pi's container rules decide, which the reader
 	// does not follow; there it draws as before (a documented limit).
 	let inContainer = false;
+	// The last line that surely ended a top-level block (a fence's closing line, a thematic break).
+	let blockEnd = -1;
 	// Set when an earlier line of the paragraph left an inline construct open, or held a math opening that
 	// such a construct may hold: the reader takes no more inline math in the paragraph.
 	let inlineCarry = false;
@@ -182,7 +184,8 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 					let closed = false;
 					let k = i + 1;
 					// The paragraph ends at a blank line or a line that opens another block.
-					for (; k < lines.length && lines[k].trim() && !PARAGRAPH_END.test(lines[k].trimStart()) && !THEMATIC_BREAK.test(lines[k].trim()); k++) {
+					// pi's math block also cuts the paragraph where it opens (closed, or pending with math in it).
+					for (; k < lines.length && lines[k].trim() && !PARAGRAPH_END.test(lines[k].trimStart()) && !THEMATIC_BREAK.test(lines[k].trim()) && !opensMathBlock(lines, k); k++) {
 						if (lines[k].includes(close) && hasClosing(lines[k], close)) {
 							closed = true;
 							break;
@@ -293,7 +296,11 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 			const left = depth < fence.depth || quoteOutside || (fence.base > 0 && body.trim() !== "" && indent < fence.base && (previous || INTERRUPT.test(body)));
 			if (!left) {
 				const close = depth === fence.depth ? body.match(FENCE_CLOSE) : null;
-				if (close && close[1][0] === fence.char && close[1].length >= fence.length && indent - fence.base <= 3) fence = undefined;
+				if (close && close[1][0] === fence.char && close[1].length >= fence.length && indent - fence.base <= 3) {
+					fence = undefined;
+					// A top-level fence's closing line ends its block for sure: the next line may open math.
+					if (depth === 0 && listColumns.length === 0) blockEnd = i;
+				}
 				push(code, i);
 				continue;
 			}
@@ -339,6 +346,7 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 			continue;
 		}
 		if (THEMATIC_BREAK.test(body) && indent - base <= 3) {
+			if (depth === 0 && listColumns.length === 0) blockEnd = i;
 			paragraph = false;
 			push(code, i);
 			continue;
@@ -394,13 +402,15 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 		// A lazy line continues the paragraph before it (in a quote or a list item) and opens no block.
 		const mathMark = (content[0] === "$" || content[0] === "\\") && MATH_MARKS.some((m) => m.open.test(content));
 		// After a code line (which may be a lazy line pi reads as text) the reader takes no math block.
-		const topLevel = () => depth + innerDepth === 0 && !marker && listColumns.length === 0 && (!paragraph || topParagraph) && read[i - 1]?.kind !== "code";
+		const topLevel = () => depth + innerDepth === 0 && !marker && listColumns.length === 0 && (!paragraph || topParagraph) && (read[i - 1]?.kind !== "code" || blockEnd === i - 1);
 		const mathEnd: number = mathMark && topLevel() && !mathOff && !htmlParagraph && !lazy && indent <= 3 ? mathBlockEnd(lines, i, content) : -1;
 		// Pending math (no closing mark, an empty block or a table start): pi shows the rest of the reply as
 		// written; for "$$" only when the rest looks like math.
 		// A mark the reader does not take as a closed top-level block may be pending math for pi: the reader then
 		// reads no more math in the reply and draws as before.
-		if (mathMark && mathEnd < 0) mathOff = true;
+		// In a quote or a list item, pi lexes the container's content on its own: pending math there ends with
+		// the container and leaves top-level math after it alone.
+		if (mathMark && mathEnd < 0 && depth + innerDepth === 0 && !marker && listColumns.length === 0) mathOff = true;
 		if (mathEnd >= 0) {
 			paragraph = false;
 			for (; i <= mathEnd; i++) push(code, i);
@@ -437,6 +447,9 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 		inContainer = depth + innerDepth > 0 || marker || listColumns.length > 0 || lazy || !topParagraph;
 		if (!marker && HEADING.test(content) && indent - base <= 3) {
 			paragraph = false;
+			// A heading is a block of its own: pending math and open constructs of the paragraph before end here.
+			pendingMath = false;
+			inlineCarry = false;
 			push({ kind: "heading", literal: literalOf(i, false), plain }, i);
 			continue;
 		}
@@ -452,6 +465,15 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 		push({ kind: "prose", literal: literalOf(i, true), plain: paragraphPlain }, i);
 	}
 	return read;
+}
+
+/** Line k opens a display math block that pi's parser takes: closed, or pending with math in it. */
+function opensMathBlock(lines: string[], k: number): boolean {
+	const content = lines[k].replace(/^ {0,3}/, "");
+	if (!(content.startsWith("$$") || content.startsWith("\\["))) return false;
+	const end = mathBlockEnd(lines, k, content);
+	if (end >= 0 || content[0] === "\\") return true;
+	return PENDING_MATH.test([content.slice(2), ...lines.slice(k + 1)].join("\n"));
 }
 
 /** "\\" before index i of text escapes it: an odd number of backslashes. */
