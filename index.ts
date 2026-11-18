@@ -483,8 +483,11 @@ function decorate(markdown: string, palette: Palette, streaming = false, cache?:
 		const read = head ? [...head.read, ...drawing.read] : drawing.read;
 		// After the last block, so nothing above it moves; a reply that ends inside a block a blank line does
 		// not close (an open fence, HTML block or math) keeps the count line at its place near the top.
-		// By readBlocks' boundary rule the lines after the boundary end in the state the whole reply ends in.
-		const atEnd = endsOpen(lines.slice(drawing.boundary + 1)) ? countPlace(read) : all.length;
+		// Only a reply whose last text is code can end open. By readBlocks' boundary rule the lines after the
+		// boundary end in the state the whole reply ends in.
+		let lastText = read.length - 1;
+		while (lastText >= 0 && read[lastText].kind === "blank") lastText--;
+		const atEnd = read[lastText]?.kind === "code" && endsOpen(lines.slice(drawing.boundary + 1)) ? countPlace(read) : all.length;
 		if (atEnd === all.length) {
 			all.push("", drawProse(line, [], palette, open, close));
 			allBreaks?.push("\n", "\n");
