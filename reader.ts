@@ -31,7 +31,8 @@ const TABLE_DELIMITER = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|
 const PARAGRAPH_END = /^(?:\x60{3,}|~{3,}|#{1,6}(?: |$)|>|<|[-*+] +\S|1[.)] +\S)/;
 // "\\", backtick, "$", "<", and the characters of inline constructs that pi's parser (marked) tokenizes
 // before its LaTeX rule when they start earlier: "[", "]", "(", ")", "*", "_", "~", ">".
-const SPECIAL_CODES = new Set([0x5c, 0x60, 0x24, 0x3c, 0x5b, 0x5d, 0x28, 0x29, 0x2a, 0x5f, 0x7e, 0x3e]);
+const SPECIAL_CODES = new Uint8Array(128);
+for (const c of [0x5c, 0x60, 0x24, 0x3c, 0x5b, 0x5d, 0x28, 0x29, 0x2a, 0x5f, 0x7e, 0x3e]) SPECIAL_CODES[c] = 1;
 const WORD_CHAR = /[\p{L}\p{N}]/u;
 const SPACE = /\s/;
 // A line that may end a paragraph and open another block: a code span reaching past it is uncertain.
@@ -52,6 +53,7 @@ function blockOf(line: string): { depth: number; indent: number; body: string; l
 
 /** Sorted ranges with overlapping ones joined. */
 function mergeRanges(ranges: Range[]): Range[] {
+	if (ranges.length < 2) return ranges.map(([start, end]) => [start, end]);
 	const merged: Range[] = [];
 	for (const [start, end] of [...ranges].sort((a, b) => a[0] - b[0])) {
 		const last = merged.at(-1);
@@ -77,7 +79,23 @@ function backtickRun(text: string, from: number, n: number): number {
 }
 
 export function readMarkdown(lines: string[]): ReadLine[] {
+	return readBlocks(lines).read;
+}
+
+/**
+ * The reading of readMarkdown plus the last finished-block boundary: the last blank line b after which the
+ * reader's state equals its start state and whose lines 0..b were read without looking past line b. Then the
+ * reading of lines 0..b does not depend on the lines after b, and the reading of the lines after b equals
+ * the reading of those lines alone (with indexes shifted by b + 1). -1 when there is none.
+ */
+export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: number } {
 	const read: ReadLine[] = [];
+	// The furthest line any lookahead has read so far; lines.length when a lookahead ran to the reply's end.
+	let seen = 0;
+	const see = (k: number) => {
+		if (k > seen) seen = k;
+	};
+	let boundary = -1;
 	let fence: { char: string; length: number; base: number; depth: number; line: number } | undefined;
 	let indentedBase: number | undefined;
 	let paragraph = false;
@@ -135,7 +153,7 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 		};
 		for (let p = from; p < text.length; ) {
 			// Jump to the next character that may open a code span, a comment, math, an escape or a construct.
-			while (p < text.length && !SPECIAL_CODES.has(text.charCodeAt(p))) p++;
+			while (p < text.length && SPECIAL_CODES[text.charCodeAt(p)] !== 1) p++;
 			if (p >= text.length) break;
 			const c = text[p];
 			if (c === "[" || c === "]" || c === "(" || c === ")" || c === ">") {
@@ -185,12 +203,13 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 					let k = i + 1;
 					// The paragraph ends at a blank line or a line that opens another block.
 					// pi's math block also cuts the paragraph where it opens (closed, or pending with math in it).
-					for (; k < lines.length && lines[k].trim() && !PARAGRAPH_END.test(lines[k].trimStart()) && !THEMATIC_BREAK.test(lines[k].trim()) && !opensMathBlock(lines, k); k++) {
+					for (; k < lines.length && lines[k].trim() && !PARAGRAPH_END.test(lines[k].trimStart()) && !THEMATIC_BREAK.test(lines[k].trim()) && !opensMathBlock(lines, k, see); k++) {
 						if (lines[k].includes(close) && hasClosing(lines[k], close)) {
 							closed = true;
 							break;
 						}
 					}
+					see(k);
 					if (!closed && (close[0] !== "$" || PENDING_MATH.test([text.slice(p + close.length), ...lines.slice(i + 1, k)].join("\n")))) pendingMath = true;
 				}
 				if (math > 0) {
@@ -227,6 +246,7 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 				uncertain ||= depth !== openDepth || !body.trim() || INTERRUPT.test(body);
 				const c = find(lines[k], 0);
 				if (c >= 0) {
+					see(k);
 					const until = untilNow();
 					if (!until || k > until.line || (k === until.line && c + ender.length > until.end)) literalUntil = { line: k, end: c + ender.length, uncertain };
 					found = true;
@@ -237,6 +257,7 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 				literal.push([p, text.length]);
 				break;
 			}
+			if (multiline) see(k);
 			if (comment) {
 				// Never closed: pi's parser hides the rest of the paragraph, or shows "<!--" as text and reads
 				// on. Nothing after it is drawn up to the paragraph's end.
@@ -328,6 +349,8 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 			paragraph = false;
 			htmlParagraph = false;
 			push({ kind: "blank", literal: [], plain: false }, i);
+			const clean = !fence && indentedBase === undefined && !paragraph && !emptyItem && previousDepth === 0 && listColumns.length === 0;
+			if (clean && seen <= i && !mathOff && !pendingMath && !inlineCarry && !htmlParagraph && literalUntil === undefined && !discovering) boundary = i;
 			continue;
 		}
 		// After a blank line, a line indented less than a list item's content ends that item.
@@ -404,6 +427,7 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 		// After a code line (which may be a lazy line pi reads as text) the reader takes no math block.
 		const topLevel = () => depth + innerDepth === 0 && !marker && listColumns.length === 0 && (!paragraph || topParagraph) && (read[i - 1]?.kind !== "code" || blockEnd === i - 1);
 		const mathEnd: number = mathMark && topLevel() && !mathOff && !htmlParagraph && !lazy && indent <= 3 ? mathBlockEnd(lines, i, content) : -1;
+		if (mathMark) see(mathEnd >= 0 ? mathEnd : lines.length);
 		// Pending math (no closing mark, an empty block or a table start): pi shows the rest of the reply as
 		// written; for "$$" only when the rest looks like math.
 		// A mark the reader does not take as a closed top-level block may be pending math for pi: the reader then
@@ -433,9 +457,11 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 				if (i < lines.length) push(code, i);
 			}
 			i++;
+			see(i);
 			// pi's parser (marked) may keep the lines after the comment's end in the HTML block up to a blank
 			// line or a line that opens another block.
 			for (; i < lines.length && lines[i].trim() && !INTERRUPT.test(blockOf(lines[i]).body); i++) push(code, i);
+			see(i);
 			i--;
 			continue;
 		}
@@ -464,14 +490,15 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 		const paragraphPlain = plain && !/^[<|]/.test(body);
 		push({ kind: "prose", literal: literalOf(i, true), plain: paragraphPlain }, i);
 	}
-	return read;
+	return { read, boundary };
 }
 
 /** Line k opens a display math block that pi's parser takes: closed, or pending with math in it. */
-function opensMathBlock(lines: string[], k: number): boolean {
+function opensMathBlock(lines: string[], k: number, see: (k: number) => void): boolean {
 	const content = lines[k].replace(/^ {0,3}/, "");
 	if (!(content.startsWith("$$") || content.startsWith("\\["))) return false;
 	const end = mathBlockEnd(lines, k, content);
+	see(end >= 0 ? end : lines.length);
 	if (end >= 0 || content[0] === "\\") return true;
 	return PENDING_MATH.test([content.slice(2), ...lines.slice(k + 1)].join("\n"));
 }

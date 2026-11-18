@@ -21,7 +21,7 @@
 //     settings.json sets edges, icons, label color, tone colors and fill (readSettings()).
 import type { ExtensionAPI, Theme, ThemeBg, ThemeColor, ThemeToken } from "@earendil-works/pi-coding-agent";
 import { backgroundAnsi, type Color, colorToRgb, foregroundAnsi, mixColors, parseColor, type RgbColorValue, rgbColor } from "@earendil-works/pi-tui";
-import { countPlace, readMarkdown, type Range } from "./reader.ts";
+import { countPlace, type Range, type ReadLine, readBlocks } from "./reader.ts";
 
 type Colorize = (text: string) => string;
 type PillTone = "success" | "error" | "warning" | "ask" | "danger" | "mode" | "owner" | "neutral";
@@ -166,8 +166,26 @@ const OWN_ICON = /^\s*([\ue000-\uf8ff]|[\u{f0000}-\u{ffffd}])\s*/u;
 
 const KNOWN = [...new Set([...Object.values(TONE_WORDS).flat(), ...Object.keys(WORD_ICON), ...Object.keys(SYNONYMS)])].sort((a, b) => b.length - a.length);
 
+type SplitLabel = { icon: string | undefined; word: string; key: string };
+/**
+ * Memo of splitLabel per icon table (undefined: no icons), since a reply draws, tones and counts the same few
+ * labels many times. Labels come from reply text, so each memo is cleared when it reaches LABEL_MEMO_MAX.
+ */
+const LABEL_MEMO_MAX = 512;
+const labelMemo = new Map<Record<string, string> | undefined, Map<string, SplitLabel>>();
+function splitLabel(label: string, icons?: Record<string, string>): SplitLabel {
+	let memo = labelMemo.get(icons);
+	if (!memo) labelMemo.set(icons, (memo = new Map()));
+	let split = memo.get(label);
+	if (!split) {
+		if (memo.size >= LABEL_MEMO_MAX) memo.clear();
+		memo.set(label, (split = readLabel(label, icons)));
+	}
+	return split;
+}
+
 /** A pill label read as its word: a known word may be followed by detail ("Passed 12/12", "Failed: 3 tests"). */
-function splitLabel(label: string, icons?: Record<string, string>): { icon: string | undefined; word: string; key: string } {
+function readLabel(label: string, icons?: Record<string, string>): SplitLabel {
 	const ownGlyph = label.match(OWN_ICON);
 	const text = (ownGlyph ? label.slice(ownGlyph[0].length) : label).replace(/\s+/g, " ").trim();
 	const lower = text.toLowerCase();
@@ -331,39 +349,94 @@ interface Drawing {
 	pills: string[];
 	/** The reply holds a written scoreboard, a line of only pills. */
 	scoreboard: boolean;
-	/** The line index before which the count line goes. */
-	place: number;
+	/** The reading of each line. */
+	read: ReadLine[];
+	/** The last finished-block boundary (readBlocks), -1 for none. */
+	boundary: number;
+	/** The number of pills drawn and whether a scoreboard was seen in lines 0..boundary. */
+	pillsAtBoundary: number;
+	scoreboardAtBoundary: boolean;
+}
+
+/**
+ * The drawn finished blocks of the reply streaming now: text is the reply up to and including the line
+ * break after a finished-block boundary, the rest is its drawing, reading and pills. One per extension
+ * instance; reused only while the palette is the same and the reply starts with text.
+ */
+interface Head {
+	palette: Palette;
+	text: string;
+	/** The drawn lines of text, joined, plus the line break after them. */
+	out: string;
+	lines: string[];
+	read: ReadLine[];
+	pills: string[];
+	scoreboard: boolean;
 }
 
 const boldEnds = (palette: Palette) => palette.bold("\u0000").split("\u0000") as [string, string];
 
 /** Draws each line of a reply; every output line is the drawing of the input line with the same index. */
-function draw(markdown: string, palette: Palette): Drawing {
-	const lines = markdown.split("\n");
-	const read = readMarkdown(lines);
+function draw(lines: string[], palette: Palette): Drawing {
+	const { read, boundary } = readBlocks(lines);
 	const [open, close] = boldEnds(palette);
 	const pills: string[] = [];
 	let scoreboard = false;
+	let pillsAtBoundary = 0;
+	let scoreboardAtBoundary = false;
 	const out = lines.map((line, i) => {
+		if (i === boundary + 1) {
+			pillsAtBoundary = pills.length;
+			scoreboardAtBoundary = scoreboard;
+		}
 		const { kind, literal } = read[i];
 		if (kind === "heading") return drawHeading(line, literal);
 		if (kind !== "prose") return line;
 		if (literal.length === 0 && PILLS_ONLY.test(line)) scoreboard = true;
 		return drawProse(line, literal, palette, open, close, pills);
 	});
-	return { lines: out, pills, scoreboard, place: countPlace(read) };
+	return { lines: out, pills, scoreboard, read, boundary, pillsAtBoundary, scoreboardAtBoundary };
 }
 
-/** Apply colors to assistant Markdown, leaving code, HTML comments and headings' text alone. */
-function decorate(markdown: string, palette: Palette, streaming = false): string {
-	const drawing = draw(markdown, palette);
+/**
+ * Apply colors to assistant Markdown, leaving code, HTML comments and headings' text alone. With a cache,
+ * the finished blocks of an earlier call on the same reply are reused and only the rest is drawn: by
+ * readBlocks' boundary rule, drawing the head and the rest apart equals drawing the whole. A call without a
+ * matching head draws the whole reply as before, so it is the reference for the reuse (test/cache.test.ts).
+ */
+function decorate(markdown: string, palette: Palette, streaming = false, cache?: { head?: Head }): string {
+	let head = cache?.head;
+	if (head && (head.palette !== palette || !markdown.startsWith(head.text))) head = undefined;
+	const lines = (head ? markdown.slice(head.text.length) : markdown).split("\n");
+	const drawing = draw(lines, palette);
+	const scoreboard = (head?.scoreboard ?? false) || drawing.scoreboard;
+	const pills = head ? [...head.pills, ...drawing.pills] : drawing.pills;
 	// The count line waits for the whole reply: drawn while streaming, it would move the text below it.
-	const line = streaming || drawing.scoreboard ? undefined : tally(drawing.pills);
+	const line = streaming || scoreboard ? undefined : tally(pills);
+	let out: string;
 	if (line) {
+		const all = head ? [...head.lines, ...drawing.lines] : [...drawing.lines];
 		const [open, close] = boldEnds(palette);
-		drawing.lines.splice(drawing.place, 0, drawProse(line, [], palette, open, close), "");
+		all.splice(countPlace(head ? [...head.read, ...drawing.read] : drawing.read), 0, drawProse(line, [], palette, open, close), "");
+		out = all.join("\n");
+	} else out = (head?.out ?? "") + drawing.lines.join("\n");
+	// Move the newly finished blocks into the head. The boundary line must end with a line break here, so
+	// that the head's text is a prefix of this reply.
+	if (cache && drawing.boundary >= 0 && drawing.boundary < lines.length - 1) {
+		const n = drawing.boundary + 1;
+		const next: Head = head ?? { palette, text: "", out: "", lines: [], read: [], pills: [], scoreboard: false };
+		next.text += lines.slice(0, n).join("\n") + "\n";
+		next.out += drawing.lines.slice(0, n).join("\n") + "\n";
+		for (let i = 0; i < n; i++) {
+			next.lines.push(drawing.lines[i]);
+			next.read.push(drawing.read[i]);
+		}
+		for (let i = 0; i < drawing.pillsAtBoundary; i++) next.pills.push(drawing.pills[i]);
+		next.scoreboard ||= drawing.scoreboardAtBoundary;
+		head = next;
 	}
-	return drawing.lines.join("\n");
+	if (cache) cache.head = head;
+	return out;
 }
 
 const HEADING_LINE = /^([ \t>]*#{1,6}[ \t]+)(.+)$/;
@@ -415,7 +488,20 @@ const ICON_SPACE = "\u2002";
 /** Edge glyphs: rounded Powerline caps (one cell), half blocks (half a cell), or none (sharp pads with a filled space). */
 const EDGE_GLYPHS: Record<Edges, [string, string]> = { round: ["\ue0b6", "\ue0b4"], half: ["\u2590", "\u258c"], sharp: ["", ""] };
 
+/** Memo of pill() per palette; cleared at LABEL_MEMO_MAX like the label memo. */
+const pillMemo = new WeakMap<Palette, Map<string, string>>();
 function pill(label: string, palette: Palette): string {
+	let memo = pillMemo.get(palette);
+	if (!memo) pillMemo.set(palette, (memo = new Map()));
+	let drawn = memo.get(label);
+	if (drawn === undefined) {
+		if (memo.size >= LABEL_MEMO_MAX) memo.clear();
+		memo.set(label, (drawn = drawPill(label, palette)));
+	}
+	return drawn;
+}
+
+function drawPill(label: string, palette: Palette): string {
 	const style = palette.pills![toneOf(label)];
 	// No-break spaces keep a two-word pill on one line when Pi wraps the paragraph.
 	const { icon, word } = splitLabel(label, palette.icons);
@@ -449,21 +535,27 @@ function opensMath(text: string, at: number): boolean {
 
 /** Escapes currency signs in prose, outside pills and math. */
 const escapeProse = (text: string) =>
-	text.replace(DOLLAR_OR_PILL, (m: string, at: number) => (m !== "$" || opensMath(text, at) ? m : "\\$"));
+	!text.includes("$") ? text : text.replace(DOLLAR_OR_PILL, (m: string, at: number) => (m !== "$" || opensMath(text, at) ? m : "\\$"));
 
 const ACTION_OR_PILL = new RegExp(String.raw`\[\[[^\[\]\n]{1,32}\]\]|(\*\*)(${Object.keys(ACTION_ICONS).join("|")})(:\*\*)`, "gi");
 const withActionIcons = (text: string) =>
-	text.replace(ACTION_OR_PILL, (m: string, before?: string, word?: string, after?: string) =>
+	!text.includes("**") ? text : text.replace(ACTION_OR_PILL, (m: string, before?: string, word?: string, after?: string) =>
 		word === undefined ? m : before + ACTION_ICONS[word.toLowerCase()] + " " + word + after,
 	);
 
+// A prose line without any of these marks draws as written: every step below leaves it unchanged.
+const PROSE_MARKS = /\[\[|\*\*|__|\$|[✓✔✗✘→├└]/;
+const GLYPHS = /[✓✔✗✘→├└]/;
+
 function drawProse(line: string, literal: Range[], palette: Palette, open: string, close: string, drawn?: string[]): string {
+	if (!PROSE_MARKS.test(line)) return line;
 	const parts = partsOf(line, literal);
 	if (!parts[0].literal) parts[0].text = parts[0].text.replace(LEAD_LABEL, (_, before: string, label: string, after: string) => before + withLabelIcon(label) + after);
 	let result = "";
 	let inBold: string | undefined;
 	const reopen = () => (inBold ? `\x1b[1m${open}` : "");
 	const glyphs = (text: string) => {
+		if (!GLYPHS.test(text)) return text;
 		const after = (m: string, color: Colorize) => color(m) + (inBold ? open : "");
 		if (palette.passed) text = text.replace(/[✓✔]/g, (m) => after(m, palette.passed!));
 		if (palette.failed) text = text.replace(/[✗✘]/g, (m) => after(m, palette.failed!));
@@ -478,7 +570,7 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
 			continue;
 		}
 		// Pills are read from the written text, before any escape or color is added around them.
-		const prose = withActionIcons(escapeProse(part.text.replace(PILL_GAP, "]]  [[")));
+		const prose = withActionIcons(escapeProse(part.text.includes("]] [[") ? part.text.replace(PILL_GAP, "]]  [[") : part.text));
 		let last = 0;
 		for (const m of prose.matchAll(INLINE)) {
 			result += glyphs(prose.slice(last, m.index));
@@ -524,12 +616,15 @@ export default function emphasis(pi: ExtensionAPI) {
 	let settings = DEFAULT_SETTINGS;
 	/** The palette with the colors object of the theme it was built from. */
 	let built: { colors: Theme["colors"]; palette: Palette } | undefined;
+	/** The finished-block cache of the reply drawn last (decorate). */
+	const cache: { head?: Head } = {};
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		currentTheme = () => ctx.ui.theme;
 		// Read once per session start; /reload picks up a change.
 		settings = readSettings((pi.getSettings() as { emphasis?: unknown }).emphasis);
 		built = undefined;
+		cache.head = undefined;
 	});
 	// The rules travel with the renderer: only a session that draws pills is told to write them.
 	pi.on("before_agent_start", (event) => {
@@ -547,7 +642,7 @@ export default function emphasis(pi: ExtensionAPI) {
 			const theme = currentTheme();
 			const colors = theme.colors;
 			if (built?.colors !== colors) built = { colors, palette: createPalette(theme, settings) };
-			return decorate(markdown, built.palette, context.isStreaming === true);
+			return decorate(markdown, built.palette, context.isStreaming === true, cache);
 		},
 		// Assistant replies only: pi (1.5.1 and later) skips user, thinking and other Markdown.
 		{ messageTypes: ["assistant"] },
