@@ -366,6 +366,41 @@ const MATH = [
 	"x $$[[Done p0q]]$$ y [[Done p1q]]",
 	"open $$ [[Done p0q]]\nx $[[Done p1q]]$ y\n\nnext $[[Done p2q]]$",
 ];
+// Review round 1 on 313e76b: a "$" inside a construct that pi's parser tokenizes first (link text or target,
+// emphasis, strikethrough, an HTML tag, an autolink, a bare URL) does not pair with a "$" after it.
+MATH.push(
+	"See [cost $5](https://example.org) and [[Done p0q]] end$",
+	"The **price $5** and [[Done p0q]] end$",
+	"Press <span title=\"$5\">OK</span> [[Done p0q]] end$",
+	"See **cost $5** [[Done p0q]] end$ \u0060[[Done p1q]]\u0060",
+	"The _price $5_ and [[Done p0q]] end$",
+	"The *price $5* and [[Done p0q]] end$",
+	"The ~~old $5~~ and [[Done p0q]] end$",
+	"See https://example.org/$5 and [[Done p0q]] end$",
+	"See <https://example.org/$5> [[Done p0q]] end$",
+	"See [cost](https://example.org/$5) and [[Done p0q]] end$",
+	"The **price $5\nstill bold** and [[Done p0q]] end$",
+	"The **price** and $[[Done p0q]]$ now",
+);
+
+// The reviewer's probe: where the reader and pi still differ, the reader draws (as on c675de2); it never
+// hides a pill that pi shows as prose.
+const PROBE = [
+	"~~~\nx\n~~~\n$$\n[[Done p0q]]\n$$", "$x$\n$$\n[[Done p0q]]\n$$", "- $a$\n\nTop $[[Done p0q]]$ now", "<https://example.org> and $[[Done p0q]]$",
+	"text \\(pending\n## x $[[Done p0q]]$", "\\\\[x\n\nTop $[[Done p0q]]$ now", "# $a$\n\nTop $[[Done p0q]]$ now", "\\[[[Done p0q]]\\] tail",
+	"$[[Done p0q]]$ tail", "text\n$[[Done p0q]]$ tail", "a$[[Done p0q]]$\n\nTop $[[Done p1q]]$ now", "See [the $[[Done p0q]]$](ref)",
+	"Top \\(abc\na | b\n--- | ---\n$[[Done p0q]]$ | row", "----\n$$\n[[Done p0q]]\n$$", "> $$\n> x\n> $$\n\nTop $[[Done p0q]]$ now",
+	"Intro\n\n$$\n$$\n\nTop $[[Done p0q]]$ now", "test $3\n[[Done p0q]] $4",
+];
+for (const md of PROBE) {
+	test("review probe: the block reader never hides a pill pi shows as prose in " + JSON.stringify(md), () => {
+		const ids = [...md.matchAll(/p\d+q/g)].map((m) => m[0]);
+		const drawn = new Set(prosePills(md).map((p) => p.split(" ")[1]));
+		const shown = piShown(md, ids);
+		for (let k = 0; k < ids.length; k++) if (shown[k]) expect(drawn.has(ids[k])).toBe(true);
+	});
+}
+
 for (const md of MATH) {
 	test("math: the block reader draws exactly the pills pi shows as prose in " + JSON.stringify(md), () => {
 		const ids = [...md.matchAll(/p\d+q/g)].map((m) => m[0]);

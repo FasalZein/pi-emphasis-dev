@@ -29,8 +29,11 @@ const MATH_MARKS = [
 const TABLE_DELIMITER = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
 // A line that ends a paragraph for pi's parser: a list item interrupts only when not empty and, if ordered, at 1.
 const PARAGRAPH_END = /^(?:\x60{3,}|~{3,}|#{1,6}(?: |$)|>|<|[-*+] +\S|1[.)] +\S)/;
-// "\\", backtick, "$", "<".
-const SPECIAL_CODES = new Set([0x5c, 0x60, 0x24, 0x3c]);
+// "\\", backtick, "$", "<", and the characters of inline constructs that pi's parser (marked) tokenizes
+// before its LaTeX rule when they start earlier: "[", "]", "(", ")", "*", "_", "~", ">".
+const SPECIAL_CODES = new Set([0x5c, 0x60, 0x24, 0x3c, 0x5b, 0x5d, 0x28, 0x29, 0x2a, 0x5f, 0x7e, 0x3e]);
+const WORD_CHAR = /[\p{L}\p{N}]/u;
+const SPACE = /\s/;
 // A line that may end a paragraph and open another block: a code span reaching past it is uncertain.
 const INTERRUPT = /^(?:\x60{3,}|~{3,}|#{1,6}(?: |$)|>|<|(?:[-*+]|\d{1,9}[.)])(?: |$))/;
 
@@ -88,6 +91,9 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 	// Math is read only at top level: in a quote or a list item pi's container rules decide, which the reader
 	// does not follow; there it draws as before (a documented limit).
 	let inContainer = false;
+	// Set when an earlier line of the paragraph left an inline construct open, or held a math opening that
+	// such a construct may hold: the reader takes no more inline math in the paragraph.
+	let inlineCarry = false;
 	// The open paragraph began at top level (no quote, no list).
 	let topParagraph = false;
 	let htmlParagraph = false;
@@ -103,22 +109,86 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 	const inline = (i: number, from: number, multiline: boolean): Range[] => {
 		const text = lines[i];
 		const literal: Range[] = from > 0 ? [[0, from]] : [];
+		// pi's parser tries its LaTeX rule first at each position, but a link, emphasis, an HTML tag, a
+		// strikethrough or a bare URL that starts earlier takes a "$" inside it out of reach. The reader does
+		// not lex these; it tracks whether one may be open (brackets, link targets, delimiter runs, tags) and
+		// takes no math from a "$" that one may hold, nor any later math in the paragraph.
+		let brackets = 0;
+		let target = 0;
+		let stars = 0;
+		let unders = 0;
+		let tildes = 0;
+		let tag = false;
+		let unsure = inlineCarry;
+		// Position p is inside a bare URL (pi's parser links it, "$" included, up to a space). The word start
+		// moves only forward, so the check stays linear in the line.
+		const hasUrl = text.includes("://") || text.includes("www.");
+		let scanned = from;
+		let wordStart = from;
+		const inUrl = (p: number) => {
+			if (!hasUrl) return false;
+			for (; scanned < p; scanned++) if (SPACE.test(text[scanned])) wordStart = scanned + 1;
+			const word = text.slice(wordStart, p);
+			return word.includes("://") || word.startsWith("www.");
+		};
 		for (let p = from; p < text.length; ) {
-			// Jump to the next character that may open a code span, a comment, math or an escape.
+			// Jump to the next character that may open a code span, a comment, math, an escape or a construct.
 			while (p < text.length && !SPECIAL_CODES.has(text.charCodeAt(p))) p++;
 			if (p >= text.length) break;
-			if (text[p] === "\\" || text[p] === "$") {
+			const c = text[p];
+			if (c === "[" || c === "]" || c === "(" || c === ")" || c === ">") {
+				if (c === "[") brackets++;
+				else if (c === "]") {
+					if (brackets > 0) brackets--;
+					if (text[p + 1] === "(") {
+						target = 1;
+						p++;
+					}
+				} else if (c === "(") {
+					if (target > 0) target++;
+				} else if (c === ")") {
+					if (target > 0) target--;
+				} else tag = false;
+				p++;
+				continue;
+			}
+			if (c === "*" || c === "_" || c === "~") {
+				let q = p;
+				while (text[q] === c) q++;
+				const before = text[p - 1] ?? " ";
+				const after = text[q] ?? " ";
+				// A run between spaces opens and closes nothing; so does "_" inside a word.
+				const inert = (SPACE.test(before) && SPACE.test(after)) || (c === "_" && WORD_CHAR.test(before) && WORD_CHAR.test(after));
+				if (!inert) {
+					if (c === "*") stars++;
+					else if (c === "_") unders++;
+					else tildes++;
+				}
+				p = q;
+				continue;
+			}
+			if (c === "\\" || c === "$") {
 				// pi shows inline math (pi-tui's latex extension) as math: its pills stay literal.
-				const math = mathOff || pendingMath || htmlParagraph || inContainer ? -1 : inlineMathEnd(text, p);
+				let math = mathOff || pendingMath || htmlParagraph || inContainer || unsure ? -1 : inlineMathEnd(text, p);
+				if (math !== -1 && (brackets > 0 || target > 0 || stars % 2 || unders % 2 || tildes % 2 || tag || inUrl(p))) {
+					unsure = true;
+					math = -1;
+				}
 				if (math === PENDING) {
 					// No closing mark on this line. With none up to the paragraph's end either, pi shows the rest of
-					// the paragraph as written (pending math), with no more math in it.
+					// the paragraph as written (pending math), with no more math in it. The search stops at the
+					// first closing mark, and a paragraph turns pending at most once, so the reader stays linear.
 					const close = text.startsWith("\\(", p) ? "\\)" : text.startsWith("\\[", p) ? "\\]" : text.startsWith("$$", p) ? "$$" : "$";
-					const rest = [text.slice(p + close.length)];
+					let closed = false;
+					let k = i + 1;
 					// The paragraph ends at a blank line or a line that opens another block.
-					for (let k = i + 1; k < lines.length && lines[k].trim() && !PARAGRAPH_END.test(lines[k].trimStart()) && !THEMATIC_BREAK.test(lines[k].trim()); k++) rest.push(lines[k]);
-					const after = rest.join("\n");
-					if (!hasClosing(after, close) && (close[0] !== "$" || PENDING_MATH.test(after))) pendingMath = true;
+					for (; k < lines.length && lines[k].trim() && !PARAGRAPH_END.test(lines[k].trimStart()) && !THEMATIC_BREAK.test(lines[k].trim()); k++) {
+						if (lines[k].includes(close) && hasClosing(lines[k], close)) {
+							closed = true;
+							break;
+						}
+					}
+					if (!closed && (close[0] !== "$" || PENDING_MATH.test([text.slice(p + close.length), ...lines.slice(i + 1, k)].join("\n")))) pendingMath = true;
 				}
 				if (math > 0) {
 					literal.push([p, math]);
@@ -128,6 +198,8 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 			}
 			const comment = text[p] === "<";
 			if (comment && !text.startsWith("<!--", p)) {
+				// An HTML tag or an autolink may hold a "$" up to its ">".
+				if (/[A-Za-z/!?]/.test(text[p + 1] ?? "")) tag = true;
 				p++;
 				continue;
 			}
@@ -175,6 +247,7 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 			}
 			p = q;
 		}
+		if (unsure || brackets > 0 || target > 0 || stars % 2 || unders % 2 || tildes % 2 || tag) inlineCarry = true;
 		return mergeRanges(literal);
 	};
 	/** The literal ranges of a prose or heading line, inside or after a code span from an earlier line. */
@@ -200,7 +273,10 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 		return mergeRanges([...after, ...alone]);
 	};
 	const push = (line: ReadLine, i: number) => {
-		if (line.kind !== "prose") pendingMath = false;
+		if (line.kind !== "prose") {
+			pendingMath = false;
+			inlineCarry = false;
+		}
 		if (line.kind !== "prose" && line.kind !== "heading" && literalUntil?.line === i) literalUntil = undefined;
 		read.push(line);
 	};
@@ -367,7 +443,10 @@ export function readMarkdown(lines: string[]): ReadLine[] {
 		// An empty list item holds no paragraph yet.
 		// An HTML block (such as "<div>") may also interrupt a paragraph.
 		if (content.startsWith("<")) htmlParagraph = true;
-		if (!paragraph) pendingMath = false;
+		if (!paragraph) {
+			pendingMath = false;
+			inlineCarry = false;
+		}
 		paragraph = !emptyItem;
 		const paragraphPlain = plain && !/^[<|]/.test(body);
 		push({ kind: "prose", literal: literalOf(i, true), plain: paragraphPlain }, i);
