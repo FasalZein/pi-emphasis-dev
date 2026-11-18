@@ -208,12 +208,13 @@ function readLabel(label: string, icons?: Record<string, string>): SplitLabel {
 	return { icon: ownGlyph?.[1] ?? (icons && group ? own(icons, group) : undefined), word, key };
 }
 
+/** The tone of each word: the first tone in this order whose words hold it. */
+const TONE_OF_KEY = new Map<string, PillTone>();
+for (const tone of ["danger", "error", "ask", "warning", "success", "mode", "owner"] as const) {
+	for (const word of TONE_WORDS[tone]) if (!TONE_OF_KEY.has(word)) TONE_OF_KEY.set(word, tone);
+}
 function toneOf(label: string): PillTone {
-	const { key } = splitLabel(label);
-	for (const tone of ["danger", "error", "ask", "warning", "success", "mode", "owner"] as const) {
-		if (TONE_WORDS[tone].includes(key)) return tone;
-	}
-	return "neutral";
+	return TONE_OF_KEY.get(splitLabel(label).key) ?? "neutral";
 }
 
 /** The share of the tone color in a panel's background; the rest is the theme's toolPendingBg. */
@@ -447,6 +448,8 @@ function decorate(markdown: string, palette: Palette, streaming = false, cache?:
 		({ lines, breaks } = splitLines(restText));
 	}
 	if (head) head.source = markdown;
+	// The text that lines split from, while they still do (joinDrawn).
+	let source: string | undefined = restText;
 	let drawing = draw(lines, palette);
 	// Streaming only: an unfinished tail waits until it completes, so it never shows raw and then jumps.
 	if (streaming) {
@@ -465,24 +468,22 @@ function decorate(markdown: string, palette: Palette, streaming = false, cache?:
 		}
 		if (cut === HOLD_LINE && last > 0) {
 			lines = lines.slice(0, last);
+			source = undefined;
 			breaks = breaks?.slice(0, last - 1);
 			drawing = draw(lines, palette);
 		} else if (kept !== undefined && cut >= 0) {
 			lines = [...lines.slice(0, last), kept];
+			source = undefined;
 			drawing = draw(lines, palette);
 		}
 	}
-	const drawn = joinLines(drawing.lines, breaks);
 	const scoreboard = (head?.scoreboard ?? false) || drawing.scoreboard;
 	// The count line waits for the whole reply: drawn while streaming, it would move the text below it.
 	const line = streaming || scoreboard ? undefined : tally(head ? [...head.pills, ...drawing.pills] : drawing.pills);
 	let out: string;
+	// Joined only when needed: a reply with a count line is joined once, below.
+	let drawn = "";
 	if (line) {
-		// A drawn line holds no line break, so the head's drawing splits back into its lines.
-		const headLines: { lines: string[]; breaks?: string[] } = head ? splitLines(head.out) : { lines: [""] };
-		const all = [...headLines.lines.slice(0, -1), ...drawing.lines];
-		const lf = (n: number) => Array<string>(n).fill("\n");
-		const allBreaks = breaks || headLines.breaks ? [...(headLines.breaks ?? lf(headLines.lines.length - 1)), ...(breaks ?? lf(lines.length - 1))] : undefined;
 		const [open, close] = boldEnds(palette);
 		const read = head ? [...head.read, ...drawing.read] : drawing.read;
 		// After the last block, so nothing above it moves; a reply that ends inside a block a blank line does
@@ -491,16 +492,26 @@ function decorate(markdown: string, palette: Palette, streaming = false, cache?:
 		// By readBlocks' boundary rule the lines after the boundary end in the state the whole reply ends in.
 		let lastText = read.length - 1;
 		while (lastText >= 0 && read[lastText].kind === "blank") lastText--;
-		const atEnd = drawing.end.open || (read[lastText]?.kind === "code" && endsOpen(lines.slice(drawing.boundary + 1))) ? countPlace(read) : all.length;
-		if (atEnd === all.length) {
-			all.push("", drawProse(line, [], palette, open, close));
-			allBreaks?.push("\n", "\n");
-		} else {
-			all.splice(atEnd, 0, drawProse(line, [], palette, open, close), "");
-			allBreaks?.splice(atEnd, 0, "\n", "\n");
+		const atEnd = drawing.end.open || (read[lastText]?.kind === "code" && endsOpen(lines.slice(drawing.boundary + 1))) ? countPlace(read) : read.length;
+		// The common case, a count line after the whole reply with no head, joined in one pass.
+		if (!head && atEnd === read.length) out = joinDrawn(drawing.lines, lines, breaks, source) + "\n\n" + drawProse(line, [], palette, open, close);
+		else {
+			// A drawn line holds no line break, so the head's drawing splits back into its lines.
+			const headLines: { lines: string[]; breaks?: string[] } = head ? splitLines(head.out) : { lines: [""] };
+			const all = [...headLines.lines.slice(0, -1), ...drawing.lines];
+			const lf = (n: number) => Array<string>(n).fill("\n");
+			const allBreaks = breaks || headLines.breaks ? [...(headLines.breaks ?? lf(headLines.lines.length - 1)), ...(breaks ?? lf(lines.length - 1))] : undefined;
+			// read has one entry per line of all.
+			if (atEnd === all.length) {
+				all.push("", drawProse(line, [], palette, open, close));
+				allBreaks?.push("\n", "\n");
+			} else {
+				all.splice(atEnd, 0, drawProse(line, [], palette, open, close), "");
+				allBreaks?.splice(atEnd, 0, "\n", "\n");
+			}
+			out = joinLines(all, allBreaks);
 		}
-		out = joinLines(all, allBreaks);
-	} else out = (head?.out ?? "") + drawn;
+	} else out = (head?.out ?? "") + (drawn = joinDrawn(drawing.lines, lines, breaks, source));
 	// Streaming only: move the newly finished blocks into the head. A finished reply (the last call, a history
 	// load, a width change) is drawn once per change and builds none. The boundary line must end with a line
 	// break here, so that the head text is a prefix of this reply.
@@ -647,6 +658,31 @@ const LINE_BREAK = /\r\n|\r|\n/g;
 function splitLines(text: string): { lines: string[]; breaks?: string[] } {
 	if (!text.includes("\r")) return { lines: text.split("\n") };
 	return { lines: text.split(LINE_BREAK), breaks: text.match(LINE_BREAK)! };
+}
+/**
+ * joinLines(drawn, breaks), where drawn is the drawing of lines and lines split from source (when given): a run
+ * of lines drawn unchanged (code, blank) is cut from source as one piece instead of joined line by line.
+ */
+function joinDrawn(drawn: string[], lines: string[], breaks?: string[], source?: string): string {
+	if (source === undefined) return joinLines(drawn, breaks);
+	const pieces: string[] = [];
+	// The start in source of the current run of unchanged lines, -1 for none; at, the start of line i.
+	let run = -1;
+	let at = 0;
+	for (let i = 0; i < lines.length; i++) {
+		const breakLength = i === lines.length - 1 ? 0 : breaks ? breaks[i].length : 1;
+		if (drawn[i] === lines[i]) {
+			if (run < 0) run = at;
+		} else {
+			if (run >= 0) pieces.push(source.slice(run, at));
+			run = -1;
+			pieces.push(drawn[i]);
+			if (breakLength) pieces.push(breaks ? breaks[i] : "\n");
+		}
+		at += lines[i].length + breakLength;
+	}
+	if (run >= 0) pieces.push(source.slice(run, at));
+	return pieces.join("");
 }
 /** The inverse of splitLines. */
 function joinLines(lines: string[], breaks?: string[]): string {

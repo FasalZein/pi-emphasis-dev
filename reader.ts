@@ -140,8 +140,9 @@ function blockOf(line: string): { depth: number; indent: number; body: string; l
 function mergeRanges(ranges: Range[]): Range[] {
 	let ordered = true;
 	for (let i = 1; i < ranges.length && ordered; i++) ordered = ranges[i][0] > ranges[i - 1][1];
-	// Already sorted with gaps between: the merge would copy them unchanged.
-	if (ordered) return ranges.map(([start, end]) => [start, end]);
+	// Already sorted with gaps between: the merge would leave them unchanged. (No caller changes a range
+	// after the reading, so the ranges are returned as they are, not copied.)
+	if (ordered) return ranges;
 	const merged: Range[] = [];
 	for (const [start, end] of [...ranges].sort((a, b) => a[0] - b[0])) {
 		const last = merged.at(-1);
@@ -337,7 +338,11 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 		for (let p = from; p < text.length; ) {
 			// Jump to the next character that may open a code span, a comment, math, an escape or a construct.
 			if (nextUrl >= 0 && nextUrl < p) nextUrl = urlStart(text, p);
-			while (p < text.length && SPECIAL_CODES[text.charCodeAt(p)] !== 1 && p !== nextUrl) p++;
+			// (Codes of 128 and above are read before the table: an index past its end is a slow load in V8.)
+			for (; p < text.length && p !== nextUrl; p++) {
+				const unit = text.charCodeAt(p);
+				if (unit < 128 && SPECIAL_CODES[unit] === 1) break;
+			}
 			if (p >= text.length) break;
 			if (p === nextUrl) {
 				// pi links no bare URL inside the text of a link.
@@ -541,6 +546,21 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 	};
 
 	for (let i = 0; i < lines.length; i++) {
+		// Fast path: a top-level fence (no quote, no list) ends only at a closing line, whose first character after
+		// spaces and tabs is the fence character (no container can end it: see "left" below). Every other line is
+		// code. Not taken in an open HTML block of types 1, 3-5, whose end marker each line is tested for below.
+		if (fence && fence.depth === 0 && fence.base === 0 && htmlEnd === undefined) {
+			const char = fence.char.charCodeAt(0);
+			for (; i < lines.length; i++) {
+				const text = lines[i];
+				let q = 0;
+				let c = text.charCodeAt(0);
+				while (c === 0x20 || c === 0x09) c = text.charCodeAt(++q);
+				if (c === char) break;
+				push(code, i);
+			}
+			if (i === lines.length) break;
+		}
 		// Only the end marker of the opening line closes the block: an opener on a line inside it, or on its
 		// closing line, starts nothing (CommonMark: one HTML block ends at the first line with its end marker).
 		const inHtml = htmlEnd !== undefined || htmlFlow;
@@ -555,8 +575,9 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 			// that is indented less in the fence, so only a line that opens a block ends the item.
 			const quoteOutside = depth > fence.depth && lead < fence.base;
 			// marked ends the item also when the line before is the fence's opening line or indented 4 more.
-			const previous = i - 1 === fence.line || blockOf(lines[i - 1]).indent - fence.base >= 4;
-			const left = depth < fence.depth || quoteOutside || (fence.base > 0 && body.trim() !== "" && indent < fence.base && (previous || INTERRUPT.test(body)));
+			// (Computed only when needed: blockOf is pure.)
+			const previous = () => i - 1 === fence!.line || blockOf(lines[i - 1]).indent - fence!.base >= 4;
+			const left = depth < fence.depth || quoteOutside || (fence.base > 0 && body.trim() !== "" && indent < fence.base && (previous() || INTERRUPT.test(body)));
 			if (!left) {
 				const close = depth === fence.depth ? body.match(FENCE_CLOSE) : null;
 				if (close && close[1][0] === fence.char && close[1].length >= fence.length && indent - fence.base <= 3) {
@@ -579,7 +600,9 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 		// Entering or leaving a block quote opens new containers, unless the line continues a paragraph lazily.
 		// A line indented 4 or more opens no block in a paragraph: it continues it, also lazily. After a line that
 		// may open an HTML block, pi may hold no paragraph there: the line is read as before.
-		const opensBlock = (indent <= 3 || !paragraph || htmlParagraph || definitionParagraph) && (INTERRUPT.test(body) || thematicBreak(body));
+		// thematicBreak(body), once per line.
+		const breakLine = thematicBreak(body);
+		const opensBlock = (indent <= 3 || !paragraph || htmlParagraph || definitionParagraph) && (INTERRUPT.test(body) || breakLine);
 		const lazy = paragraph && depth < previousDepth && body.trim() !== "" && !opensBlock;
 		if (depth !== previousDepth && !lazy) {
 			paragraph = false;
@@ -632,7 +655,7 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 			push({ kind: "prose", literal: literalOf(i, false), plain: false }, i);
 			continue;
 		}
-		if (thematicBreak(body) && indent - base <= 3) {
+		if (breakLine && indent - base <= 3) {
 			if (depth === 0 && listColumns.length === 0) blockEnd = i;
 			paragraph = false;
 			push(code, i);
@@ -649,7 +672,7 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 		// marker or five after a list marker open indented code.
 		let innerDepth = 0;
 		for (;;) {
-			const m = thematicBreak(content) ? null : content.match(LIST_MARKER);
+			const m = (content === body ? breakLine : thematicBreak(content)) ? null : content.match(LIST_MARKER);
 			// The first item of a list interrupts a paragraph only when it is not empty and, if ordered, starts
 			// at 1; pi's parser does not always hold to this. Such a line is read both ways: as an item for
 			// what it opens on this line, as paragraph text for the lines after it.
