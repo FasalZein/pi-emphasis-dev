@@ -15,8 +15,8 @@
 //     upstream's replyGuidance()).
 //   - Needs you and Decision have their own tone, "ask", drawn solid.
 //   - Pill colors are tinted panels taken from the current pi theme; icons are one family of
-//     same-size Material Design circles; a count line of the reply's pills is drawn under the
-//     first paragraph.
+//     same-size Material Design circles; a count line of the reply's pills is drawn after the
+//     last block.
 //   - The PI_EMPHASIS_* environment switches are gone. An optional "emphasis" block in pi's
 //     settings.json sets edges, icons, label color, tone colors and fill (readSettings()).
 import type { ExtensionAPI, Theme, ThemeBg, ThemeColor, ThemeToken } from "@earendil-works/pi-coding-agent";

@@ -1,5 +1,5 @@
 // The block reader: the lines of a reply in; per line a kind, the literal ranges and the plain flag out;
-// plus the place of the count line (countPlace).
+// plus the fallback place of the count line (countPlace).
 
 // Which text of a reply is prose that may be drawn. The drawing and the count line share this one
 // reading, so a pill is counted exactly when it is drawn. It follows CommonMark as pi's parser applies it,
@@ -861,7 +861,8 @@ function mathBlockEnd(lines: string[], i: number, content: string): number {
 }
 
 /**
- * Where the count line goes: after the reply's first block when that is a top-level paragraph or heading
+ * Where the count line goes in a reply that ends inside an open block (elsewhere it goes after the last block,
+ * see decorate in index.ts): after the reply's first block when that is a top-level paragraph or heading
  * closed by a blank line, otherwise above the first block. Both are top-level block boundaries, so the
  * inserted line and its blank line never join, split or enter another block.
  */
