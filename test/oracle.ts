@@ -56,6 +56,13 @@ export function piShown(md: string, ids: string[]): boolean[] {
 	return ids.map((id) => prose.includes(id));
 }
 
+const span = (name: string) => (t: string) => "{" + name + "}" + t + "{/" + name + "}";
+const styled = { ...theme, code: plain, codeBlock: plain, heading: span("H"), bold: span("B") };
+/** pi's rendering with heading and bold spans marked {H}…{/H} and {B}…{/B}, terminal control sequences removed. */
+export function piStyled(md: string): string {
+	return new Markdown(md, 0, 0, styled).render(2000).map((l) => l.replace(CONTROL, "").trimEnd()).join("\n");
+}
+
 /** The link targets (OSC 8) of pi's rendering of md, in order. */
 export function piLinks(md: string): string[] {
 	return [...piRender(md).matchAll(LINK_TARGET)].map((m) => m[1]);

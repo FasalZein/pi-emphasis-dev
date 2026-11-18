@@ -21,7 +21,7 @@
 //     settings.json sets edges, icons, label color, tone colors and fill (readSettings()).
 import type { ExtensionAPI, Theme, ThemeBg, ThemeColor, ThemeToken } from "@earendil-works/pi-coding-agent";
 import { backgroundAnsi, type Color, colorToRgb, foregroundAnsi, mixColors, parseColor, type RgbColorValue, rgbColor } from "@earendil-works/pi-tui";
-import { countPlace, type Range, type ReadLine, readBlocks } from "./reader.ts";
+import { countPlace, mayDefine, type Range, type ReadLine, readBlocks } from "./reader.ts";
 
 type Colorize = (text: string) => string;
 type PillTone = "success" | "error" | "warning" | "ask" | "danger" | "mode" | "owner" | "neutral";
@@ -433,11 +433,18 @@ function draw(lines: string[], palette: Palette): Drawing {
  */
 function decorate(markdown: string, palette: Palette, streaming = false, cache?: { head?: Head }): string {
 	let head = cache?.head;
-	if (head && (head.palette !== palette || markdown.length < head.length || !markdown.startsWith(head.source.slice(0, head.length)))) head = undefined;
-	if (head) head.source = markdown;
-	const restText = head ? markdown.slice(head.length) : markdown;
+	// A head that ends with a CR does not fit a reply whose next character is LF: that CRLF is one line break.
+	if (head && (head.palette !== palette || markdown.length < head.length || !markdown.startsWith(head.source.slice(0, head.length)) || (markdown[head.length] === "\n" && markdown[head.length - 1] === "\r"))) head = undefined;
+	let restText = head ? markdown.slice(head.length) : markdown;
 	// pi's parser reads CRLF and CR as line breaks too; the drawing keeps each break as written.
-	const { lines, breaks } = splitLines(restText);
+	let { lines, breaks } = splitLines(restText);
+	// A link definition after the head may turn reference-link text in the head into a link: read it all again.
+	if (head && restText.includes("]:") && lines.some(mayDefine)) {
+		head = undefined;
+		restText = markdown;
+		({ lines, breaks } = splitLines(restText));
+	}
+	if (head) head.source = markdown;
 	const drawing = draw(lines, palette);
 	const drawn = joinLines(drawing.lines, breaks);
 	const scoreboard = (head?.scoreboard ?? false) || drawing.scoreboard;
@@ -446,7 +453,7 @@ function decorate(markdown: string, palette: Palette, streaming = false, cache?:
 	let out: string;
 	if (line) {
 		// A drawn line holds no line break, so the head's drawing splits back into its lines.
-		const headLines = head ? splitLines(head.out) : { lines: [""], breaks: [] };
+		const headLines: { lines: string[]; breaks?: string[] } = head ? splitLines(head.out) : { lines: [""] };
 		const all = [...headLines.lines.slice(0, -1), ...drawing.lines];
 		const lf = (n: number) => Array<string>(n).fill("\n");
 		const allBreaks = breaks || headLines.breaks ? [...(headLines.breaks ?? lf(headLines.lines.length - 1)), ...(breaks ?? lf(lines.length - 1))] : undefined;
@@ -488,7 +495,7 @@ const LINE_BREAK = /\r\n|\r|\n/g;
 /** Lines split at LF, CRLF and CR; breaks is undefined when every break is LF. */
 function splitLines(text: string): { lines: string[]; breaks?: string[] } {
 	if (!text.includes("\r")) return { lines: text.split("\n") };
-	return { lines: text.split(LINE_BREAK), breaks: text.match(LINE_BREAK) ?? [] };
+	return { lines: text.split(LINE_BREAK), breaks: text.match(LINE_BREAK)! };
 }
 /** The inverse of splitLines. */
 function joinLines(lines: string[], breaks?: string[]): string {
@@ -632,7 +639,8 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
 		const prose = withActionIcons(escapeProse(part.text.includes("]] [[") ? part.text.replace(PILL_GAP, "]]  [[") : part.text));
 		// One pass over markers, pills and glyphs. A glyph never holds a character a marker or a pill starts
 		// with, so the matches are those of INLINE with the glyphs of the text between them.
-		const each = (match: string, slashes?: string, marker?: string, label?: string, passed?: string, failed?: string, arrow?: string, tree?: string) => {
+		// before and after: the characters around the match in the prose part.
+		const each = (before: string | undefined, after: string | undefined, match: string, slashes?: string, marker?: string, label?: string, passed?: string, failed?: string, arrow?: string, tree?: string) => {
 			if (passed !== undefined) return glyph(match, palette.passed);
 			if (failed !== undefined) return glyph(match, palette.failed);
 			if (arrow !== undefined) return glyph(match, palette.arrow);
@@ -643,10 +651,12 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
 				return pill(label, palette) + reopen();
 			}
 			if ((slashes ?? "").length % 2 === 1) {
-				if (!inBold) escaped = marker;
+				// The star or underscore left over opens only before a non-space (a left-flanking run).
+				if (!inBold) escaped = after !== undefined && !/\s/.test(after) ? marker : undefined;
 				return match;
 			}
-			if (!inBold && escaped === marker) {
+			// The next marker closes the leftover opener only after a non-space (a right-flanking run).
+			if (!inBold && escaped === marker && before !== undefined && !/\s/.test(before) && slashes === "") {
 				escaped = undefined;
 				return match;
 			}
@@ -662,8 +672,9 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
 		};
 		// The shorter INLINE is faster where the text holds no glyph; its callback gets only its own groups.
 		result += GLYPHS.test(prose)
-			? prose.replace(INLINE_OR_GLYPH, (m: string, s?: string, k?: string, l?: string, p?: string, f?: string, a?: string, t?: string) => each(m, s, k, l, p, f, a, t))
-			: prose.replace(INLINE, (m: string, s?: string, k?: string, l?: string) => each(m, s, k, l));
+			? prose.replace(INLINE_OR_GLYPH, (m: string, s: string | undefined, k: string | undefined, l: string | undefined, p: string | undefined, f: string | undefined, a: string | undefined, t: string | undefined, at: number) =>
+					each(prose[at - 1], prose[at + m.length], m, s, k, l, p, f, a, t))
+			: prose.replace(INLINE, (m: string, s: string | undefined, k: string | undefined, l: string | undefined, at: number) => each(prose[at - 1], prose[at + m.length], m, s, k, l));
 	}
 	// An unclosed span (streaming or literal asterisks) ends its color at the line end.
 	if (inBold) result += close;

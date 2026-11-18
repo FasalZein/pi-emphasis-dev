@@ -2,7 +2,7 @@
 // pi's parser. Expected values come from pi's own rendering through test/oracle.ts (pi-tui's Markdown), from
 // the CommonMark escape rule, or from the drawing of the equivalent unescaped or ATX form.
 import { describe, expect, test } from "bun:test";
-import { piLinks, piRender, piShown } from "./oracle.ts";
+import { piLinks, piRender, piShown, piStyled } from "./oracle.ts";
 import { countLineOf, load } from "./seam.ts";
 
 const stub = {
@@ -81,10 +81,18 @@ describe("link metadata", () => {
 			expect(piLinks(ext.draw(md))).toEqual(piLinks(md));
 		});
 	}
-	test("a pill in link text is drawn: pi shows it as prose", () => {
-		const md = "See [it [[Done p0q]]](/x) too";
-		expect(drawnIds(md)).toEqual([true]);
-		expect(piShown(md, ["p0q"])).toEqual([true]);
+	// Owner decision 2026-11-18: a pill or bold in link text is not drawn and not counted, so the link stays
+	// the working link pi draws (an escape in the text would break it). Expected: pi's link targets and visible
+	// text of the reply alone.
+	for (const md of ["See [**it** now](/a__b) too", "See [it ✓ → **x**][r] too\n\n[r]: /a__b", "See [**it**] too\n\n[**it**]: /a__b", "See ![**it** [[Done p0q]]](/i.png) too", "See [it [[Done p0q]]](/x) too", "See [[[Done p0q]] it][r] too\n\n[r]: /x", "See [[Done p0q]](/x) too"]) {
+		test("link text is left to pi: the same link targets and visible text as pi alone in " + JSON.stringify(md), () => {
+			expect(piLinks(ext.draw(md))).toEqual(piLinks(md));
+			expect(piStyled(ext.draw(md))).toBe(piStyled(md));
+		});
+	}
+	test("pi links bold link text; a pill in link-shaped text is not counted", () => {
+		expect(piLinks("See [**it** now](/a__b) too")).toEqual(["/a__b"]);
+		expect(countLineOf(ext, "See [it [[Done]]](/x) too.\n\n" + FOUR)).toBeUndefined();
 	});
 	test("a pill in reference definition is not counted", () => {
 		const md = '[docs]: /guide "[[Done]]"\n\n' + FOUR;
@@ -137,4 +145,58 @@ describe("oracle", () => {
 		expect(piShown("[spec](https://example.test/p0q)", ["p0q", "spec"])).toEqual([false, true]);
 		expect(piLinks("[spec](https://example.test/p0q)")).toEqual(["https://example.test/p0q"]);
 	});
+});
+
+// Review round 1 on ce3acf7 (~/.pi/artifacts/reviewer/reader-correctness/report.md), each probe as written there.
+describe("review round 1", () => {
+	test("a head cached from another reply does not split its CRLF: equal to the uncached drawing, breaks as written", () => {
+		const score = "[[Done]] [[Failed]] [[Passed]] [[Blocked]] [[Needs you]] text";
+		const streamed = load(stub);
+		streamed.draw("Intro\r\rX", true);
+		const other = "Intro\r\r\n" + score;
+		const out = streamed.draw(other);
+		expect(out).toBe(load(stub).draw(other));
+		const line = countLineOf(ext, other)!;
+		expect(out.replace(line + "\n\n", "").match(EOL)).toEqual(other.match(EOL));
+	});
+	// Link targets: pi's exact target survives the drawing, and no pill hidden in metadata is drawn.
+	for (const md of [
+		'[s](/a__b\n "title [[Done p0q]]")',
+		'[r]:\n   /a__b "[[Done p0q]]"\n\n[s][r]',
+		'- item\n- [r]: /a__b "[[Done p0q]]"\n\n[read][r]',
+		"[log https://x.test/a__b]",
+		"a__b@example.org",
+		"> $x$ [s](/a__b)",
+		"- $x$\n- [s](/a__b)",
+		"- cost \\$5 and [s](/a__b)",
+		'[outer [inner](/u)](/bad "[[Done p0q]]")',
+	]) {
+		test("link targets stay pi's and pills are drawn where pi shows them in " + JSON.stringify(md), () => {
+			expect(piLinks(md).length).toBeGreaterThan(0);
+			expect(piLinks(ext.draw(md))).toEqual(piLinks(md));
+			expect(drawnIds(md)).toEqual(piShown(md, idsOf(md)));
+		});
+	}
+	test("a definition ends its block: a closed math block right after it is math, as pi shows it", () => {
+		const md = "[r]: /x\n$$\n[[Done p0q]]\n$$";
+		expect(piShown(md, ["p0q"])).toEqual([false]);
+		expect(drawnIds(md)).toEqual([false]);
+	});
+	// Setext: a lazy or four-space underline makes no heading for pi; the pill stays drawn.
+	for (const md of ["> Title [[Done p0q]]\n===", "Title [[Done p0q]]\n    ===", "> Title [[Done p0q]]\n> ==="]) {
+		test("a pill is drawn exactly when pi shows it outside a heading in " + JSON.stringify(md), () => {
+			const heading = piStyled(md).includes("{H}");
+			expect(piShown(md, ["p0q"])).toEqual([true]);
+			expect(drawnIds(md)).toEqual([!heading]);
+		});
+	}
+	// Bold: the drawing colors exactly the spans pi shows bold.
+	const [open, close] = ext.draw("**\u0000**").split("\u0000").map((s) => s.replace(/\*\*/g, ""));
+	const drawnBold = (md: string) => [...ext.draw(md).split(open).slice(1)].map((s) => s.split(close)[0].replace(/\*\*$/, ""));
+	const piBold = (md: string) => [...piStyled(md).matchAll(/\{B\}(.*?)\{\/B\}/g)].map((m) => m[1]);
+	for (const md of ["x \\** then **actual** after", "\\**Check:** next", "x \\** a **b**", "a \\**b** c **d**"]) {
+		test("the drawing colors the bold spans pi shows in " + JSON.stringify(md), () => {
+			expect(drawnBold(md)).toEqual(piBold(md));
+		});
+	}
 });

@@ -397,7 +397,6 @@ MATH.push(
 // except for a documented limit (DESIGN.md), where the documented reader result is asserted instead.
 const LIMIT = {
 	autolink: "math after an autolink is drawn as prose",
-	linkText: "math in link text is drawn as prose",
 	tableAfterPending: "math in a table after a pending \\( is drawn as prose",
 } as const;
 const PROBES: [md: string, limits?: Record<string, keyof typeof LIMIT>][] = [
@@ -415,7 +414,7 @@ const PROBES: [md: string, limits?: Record<string, keyof typeof LIMIT>][] = [
 	["$[[Done p0q]]$ tail"],
 	["text\n$[[Done p0q]]$ tail"],
 	["a$[[Done p0q]]$\n\nTop $[[Done p1q]]$ now"],
-	["See [the $[[Done p0q]]$](ref)", { p0q: "linkText" }],
+	["See [the $[[Done p0q]]$](ref)"],
 	["Top \\(abc\na | b\n--- | ---\n$[[Done p0q]]$ | row", { p0q: "tableAfterPending" }],
 	["----\n$\n[[Done p0q]]\n$"],
 	["> $\n> x\n> $\n\nTop $[[Done p0q]]$ now"],
