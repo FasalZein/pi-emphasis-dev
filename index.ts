@@ -287,8 +287,9 @@ export function createPalette(theme: ThemeLike, settings: EmphasisSettings = DEF
 	};
 }
 
-// Escaped bold markers, bold markers, or a [[pill]] of 1-32 characters.
-const INLINE = /(\\*)(\*\*|__)|\[\[([^\[\]\n]{1,32})\]\]/g;
+// Escaped bold markers, bold markers, or a [[pill]] of 1-32 characters. A backslash run is read from
+// its start only, so a long run without a marker costs time linear in its length.
+const INLINE = /(?<!\\)(\\*)(\*\*|__)|\[\[([^\[\]\n]{1,32})\]\]/g;
 // A written scoreboard: a line of two or more pills and nothing else.
 const PILLS_ONLY = /^\s*\[\[[^\[\]\n]{1,32}\]\](?:\s*\[\[[^\[\]\n]{1,32}\]\])+\s*$/;
 /** The fewest state pills (ask, error, warning or success) a reply needs for a count line. */
@@ -724,7 +725,8 @@ function withLabelIcon(label: string): string {
 }
 
 // A line's leading bold label, after an optional list marker, tree connector, or kind-of-work pill.
-const LEAD_LABEL = /^(\s*(?:[-*+]|\d+\.)?\s*(?:[├└]──\s*)?(?:\[\[[^\[\]\n]{1,32}\]\]\s*)?\*\*)([^*`\n]{1,32})(\*\*)/;
+// Each whitespace run is followed by a non-space token, so a failed match costs time linear in the line.
+const LEAD_LABEL = /^(\s*(?:(?:[-*+]|\d+\.)\s*)?(?:[├└]──\s*)?(?:\[\[[^\[\]\n]{1,32}\]\]\s*)?\*\*)([^*`\n]{1,32})(\*\*)/;
 
 const NBSP = "\u00a0";
 /**
