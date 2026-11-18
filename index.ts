@@ -402,6 +402,13 @@ function withLabelIcon(label: string): string {
 const LEAD_LABEL = /^(\s*(?:[-*+]|\d+\.)?\s*(?:[├└]──\s*)?(?:\[\[[^\[\]\n]{1,32}\]\]\s*)?\*\*)([^*`\n]{1,32})(\*\*)/;
 
 const NBSP = "\u00a0";
+/**
+ * The space between a pill's icon and its word: an en space. Ghostty (1.4.0, src/font) lets a Nerd Font
+ * icon draw over two cells only when a space, an en space or an empty cell follows it, so the icon grows
+ * to about the height of the letters in the same pill width. pi wraps lines only at U+0020, so the icon
+ * and its word stay on one line. Other terminals draw it as a one-cell space.
+ */
+const ICON_SPACE = "\u2002";
 /** Edge glyphs: rounded Powerline caps (one cell), half blocks (half a cell), or none (sharp pads with a filled space). */
 const EDGE_GLYPHS: Record<Edges, [string, string]> = { round: ["\ue0b6", "\ue0b4"], half: ["\u2590", "\u258c"], sharp: ["", ""] };
 
@@ -409,7 +416,7 @@ function pill(label: string, palette: Palette): string {
 	const style = palette.pills![toneOf(label)];
 	// No-break spaces keep a two-word pill on one line when Pi wraps the paragraph.
 	const { icon, word } = splitLabel(label, palette.icons);
-	const text = (icon && word ? `${icon} ${word}` : word || label.trim()).replace(/ /g, NBSP);
+	const text = icon && word ? icon + ICON_SPACE + word.replace(/ /g, NBSP) : (word || label.trim()).replace(/ /g, NBSP);
 	const edges = palette.edges ?? "round";
 	const [left, right] = style.cap ? EDGE_GLYPHS[edges] : ["", ""];
 	const pad = style.cap && edges === "sharp" ? NBSP : "";

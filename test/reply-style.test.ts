@@ -86,7 +86,7 @@ describe("every word the rules teach is drawn", () => {
 		const ext = load("tui");
 		for (const kind of kinds) {
 			expect(toneOf(kind)).toBe("mode");
-			expect(ext.draw(`x [[${kind}]]`)).toMatch(new RegExp(`${ICON.source}\u00a0${kind}`, "u"));
+			expect(ext.draw(`x [[${kind}]]`)).toMatch(new RegExp(`${ICON.source}\u2002${kind}`, "u"));
 		}
 	});
 
@@ -96,7 +96,7 @@ describe("every word the rules teach is drawn", () => {
 			expect(toneOf(word)).not.toBe("neutral");
 			const out = ext.draw(`x [[${word}]]`);
 			// The pill joins its icon and words with no-break spaces.
-			expect(out).toMatch(new RegExp(`${ICON.source}\u00a0${word.replace(/ /g, "\u00a0")}`, "u"));
+			expect(out).toMatch(new RegExp(`${ICON.source}\u2002${word.replace(/ /g, "\u00a0")}`, "u"));
 		}
 	});
 
@@ -117,11 +117,11 @@ describe("the emphasis settings block reaches the drawing", () => {
 	test("edges sharp draws no rounded caps", () => {
 		const out = load("tui", { emphasis: { edges: "sharp" } }).draw("x [[Done]]");
 		expect(out).not.toMatch(/[\ue0b4\ue0b6]/);
-		expect(out).toContain("\u00a0\u{f05e0}\u00a0Done\u00a0");
+		expect(out).toContain("\u00a0\u{f05e0}\u2002Done\u00a0");
 	});
 	test("no settings block draws rounded caps and filled icons", () => {
 		const out = load("tui").draw("x [[Done]]");
 		expect(out).toMatch(/\ue0b6/);
-		expect(out).toContain("\u{f05e0}\u00a0Done");
+		expect(out).toContain("\u{f05e0}\u2002Done");
 	});
 });

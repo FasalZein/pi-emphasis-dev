@@ -51,14 +51,14 @@ describe("pill colors from the theme", () => {
 });
 
 describe("edges and icons", () => {
-	test("round draws Powerline caps with no space inside", () => expect(draw("[[Done]]")).toMatch(/\ue0b6\x1b\[39m.*\x1b\[1m\u{f05e0}\u00a0Done\x1b/u));
+	test("round draws Powerline caps with no space inside", () => expect(draw("[[Done]]")).toMatch(/\ue0b6\x1b\[39m.*\x1b\[1m\u{f05e0}\u2002Done\x1b/u));
 	test("half draws half blocks", () => {
 		const out = draw("[[Done]]", { edges: "half" });
 		expect(out).toContain("\u2590");
 		expect(out).toContain("\u258c");
 	});
-	test("sharp pads the word with one filled space on each side", () => expect(draw("[[Done]]", { edges: "sharp" })).toContain("\x1b[1m\u00a0\u{f05e0}\u00a0Done\u00a0\x1b"));
-	test("outline icons", () => expect(draw("[[Done]]", { icons: "outline" })).toContain("\u{f05e1}\u00a0Done"));
+	test("sharp pads the word with one filled space on each side", () => expect(draw("[[Done]]", { edges: "sharp" })).toContain("\x1b[1m\u00a0\u{f05e0}\u2002Done\u00a0\x1b"));
+	test("outline icons", () => expect(draw("[[Done]]", { icons: "outline" })).toContain("\u{f05e1}\u2002Done"));
 	test("no icons", () => expect(draw("[[Done]]", { icons: "none" })).toContain("\x1b[1mDone\x1b"));
 	test("pills next to each other are two spaces apart", () => expect(draw("[[Done]] [[Failed]]")).toMatch(/\ue0b4\x1b\[39m  /));
 });

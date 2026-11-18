@@ -66,7 +66,9 @@ The icon in front of the pill word.
 | `outline` | The same circles, drawn as rings |
 | `none` | No icons |
 
-All icons of a set have the same size: in a Nerd Font Mono font, each one measures 599 × 600 font units and is centred on the height of a capital letter. The Material Design set has no circle with a dollar sign, so Costs money, Destructive, Irreversible and Unsafe share an octagon.
+All icons of a set have the same size: in a Nerd Font Mono font, each one measures 599 × 600 font units and is centred on the height of a capital letter.
+
+An en space (U+2002) follows each icon. Ghostty lets a Nerd Font icon draw over two cells when a space or an en space follows it, so with a non-Mono Nerd Font the icon is about as tall as the letters and the pill keeps its width. pi breaks lines only at a normal space, so the icon and its word stay on one line. Other terminals draw the en space as a normal one-cell space. In Ghostty, `adjust-icon-height` makes the icons taller still. The Material Design set has no circle with a dollar sign, so Costs money, Destructive, Irreversible and Unsafe share an octagon.
 
 ### labels
 

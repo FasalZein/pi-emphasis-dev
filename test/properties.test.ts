@@ -3,6 +3,7 @@
 import { expect, test } from "bun:test";
 import * as hegel from "@hegeldev/hegel";
 import * as gs from "@hegeldev/hegel/generators";
+import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { DEFAULT_SETTINGS, VOCABULARY, countLine, createPalette, decorate, readSettings } from "../index.ts";
 
 const TONES = ["success", "error", "warning", "ask", "danger", "mode", "owner", "neutral"] as const;
@@ -99,6 +100,21 @@ test("an unknown theme color name never stops the drawing and falls back to the 
 		const expected = decorate("**Cause:** [[" + word + "]]", createPalette(strict, known.has(name) ? settings : DEFAULT_SETTINGS));
 		expect(out).toBe(expected);
 	}));
+
+// pi's own wrapper (pi-tui) breaks lines at U+0020 only; a pill's icon and its word must stay on one line.
+const ICON_GLYPH = /[\u{f0000}-\u{ffffd}]/u;
+test("pi's line wrapping never ends a line on a pill icon", () =>
+	hegel.test((tc) => {
+		const words = tc.draw(gs.arrays(gs.sampledFrom(["Done", "Needs you", "In progress", "Costs money", "Failed", "Partial"]), { minSize: 1, maxSize: 6 }));
+		const width = tc.draw(gs.integers({ minValue: 12, maxValue: 60 }));
+		const line = decorate("- **Subject** " + words.map((w) => "[[" + w + "]] some words").join(" "), palette);
+		for (const row of wrapTextWithAnsi(line, width)) {
+			const visible = row.replace(/\x1b\[[0-9;a-zA-Z-]*m/g, "").trimEnd();
+			expect(ICON_GLYPH.test(visible.slice(-2))).toBe(false);
+		}
+	}));
+
+test("the icon space is one cell wide for pi", () => expect(visibleWidth("\u2002")).toBe(1));
 
 test("decorate leaves inline code spans byte for byte", () =>
 	hegel.test((tc) => {

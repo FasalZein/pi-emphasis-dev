@@ -8,7 +8,7 @@ const theme = {
 	getBgAnsi: (color: string) => `\x1b[48;bg-${color}m`,
 } as unknown as ThemeLike;
 const palette = createPalette(theme);
-const plain = (text: string) => decorate(text, palette).replace(/\x1b\[[0-9;a-zA-Z-]*m/g, "").replace(/[\ue0b4\ue0b6]/g, "|").replace(/\u00a0/g, " ");
+const plain = (text: string) => decorate(text, palette).replace(/\x1b\[[0-9;a-zA-Z-]*m/g, "").replace(/[\ue0b4\ue0b6]/g, "|").replace(/[\u00a0\u2002]/g, " ");
 
 describe("pill tone", () => {
 	test.each([

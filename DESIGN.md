@@ -6,6 +6,7 @@ Tree:
 - renderer / edges -> round: Powerline caps, 1 cell, no space inside (round 5, 2026-11-18)
 - renderer / edges setting -> round | half (half blocks, 1/2 cell, square) | sharp (square, 1 cell of fill) (round 5 and 6, 2026-11-18)
 - renderer / icons -> filled Material Design circle set; setting filled | outline | none (round 3 and 6, 2026-11-18)
+- renderer / icon size -> an en space (U+2002) between icon and word: Ghostty then draws the icon over two cells, about the height of the letters, in the same pill width; pi keeps icon and word on one line (round 11, 2026-11-18)
 - renderer / asks -> Needs you and Decision have their own tone "ask", solid yellow (round 6, 2026-11-18)
 - renderer / count line -> one pill per word under the first paragraph, 5 or more state pills, asks first (round 6, 2026-11-18)
 - renderer / labels and lead-ins -> icons as before (round 6); color blue, theme mdLink, as the default; setting `labels` with any theme color or hex; the owner's own settings use cyan, mdListBullet (round 9 and after, 2026-11-18)
@@ -22,7 +23,7 @@ Tokens:
 Type: the terminal's font; the extension cannot change size or face. Icons are Nerd Font Material Design glyphs that all measure 599x600 units in a Nerd Font Mono cell, centred on the cap height.
 Layout: inline. The count line sits after the first paragraph, as its own paragraph.
 Components:
-- Pill: [edge] [icon] [word or word + detail] [edge]. No-break spaces inside.
+- Pill: [edge] [icon] [en space] [word or word + detail] [edge]. No-break spaces inside the word.
 - Icon sets (filled / outline): settled check-circle, failed close-circle, blocked minus-circle, consequence alert-octagon, needs you account-circle, decision help-circle, unverified dots-circle, in progress play-circle, pending clock, partial half-circle, skipped skip-next-circle, at risk alert-circle; kinds of work: lightbulb, magnify, eye-circle, code-braces, checkbox-circle.
 - Count line: one pill per state word with its count, order ask, error, warning, success.
 States:
