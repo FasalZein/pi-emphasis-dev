@@ -118,13 +118,13 @@ Write `[[Word]]` beside the thing it describes. The word decides the color and t
 | Purple panel | owner | Ownership | Owned, Shared, Foreign |
 | Grey panel | neutral | Context | Inferred, New, Changed, Optional, and any other label |
 
-The colors come from the current pi theme, so `/theme` recolors the pills. [docs/configuration.md](docs/configuration.md) explains how to change the color, fill, ends and icons.
+The colors come from the current pi theme, so a theme chosen with the Theme selector of `/settings` recolors the pills. [docs/configuration.md](docs/configuration.md) explains how to change the color, fill, ends and icons.
 
 - **Detail.** A known word may be followed by detail: `[[Passed 12/12]]`, `[[Failed: 3 tests]]`, `[[In progress 40%]]`.
 - **Synonyms.** Completed, Complete, OK and Finished display as Done. Fail, Failing and Error display as Failed. Pass displays as Passed, Waiting as Pending, and Needs review as Review.
 - **Your own icon.** A label that starts with a Nerd Font glyph keeps that glyph.
 - **Length.** A label can be up to 32 characters. Longer ones are left as typed.
-- **Count line.** When a reply has 5 or more state pills of at least 2 words, a line under its first paragraph shows one pill per word with its count, asks first: [[Needs you 1]] [[Partial 1]] [[Done 4]]. The line appears when the reply is complete. A reply that already has a line of only pills gets no count line.
+- **Count line.** When a reply has 5 or more state pills of at least 2 words, a line under its first paragraph shows one pill per word with its count, asks first: [[Needs you 1]] [[Partial 1]] [[Done 4]]. The line appears when the reply is complete. A reply that already has a line of only pills gets no count line. Pills in code, inline code and HTML comments are not drawn and not counted. Pi hands the extension each text block of a message on its own, so the count line counts the pills of one text block: a message with text before and after a tool call can show two count lines, or none.
 
 ## Labels and shapes
 
@@ -162,7 +162,7 @@ To add a word, an icon or a synonym, edit the tables at the top of [`index.ts`](
 | Boxes or question marks in or around pills | The terminal has no Nerd Font symbols | [Set up your terminal](#set-up-your-terminal) |
 | Icons that overlap the next letter | The font draws its icons wider than one cell | Use the "Mono" variant of the Nerd Font, such as JetBrainsMono Nerd Font Mono. Its icons are smaller |
 | Small icons | A "Mono" Nerd Font puts every icon in one cell, and terminals other than Ghostty keep an icon in one cell | In Ghostty, use the font's non-Mono variant: the icon then grows over the en space after it. `adjust-icon-height` in the Ghostty config makes icons taller still |
-| Pills that are all one color, in reverse video | The terminal draws no truecolor, or pi's theme has no panel colors (the `system` theme when the terminal reports none) | Choose a theme with `/theme`, such as `dark`, in a truecolor terminal |
+| Pills that are all one color, in reverse video | The terminal draws no truecolor, or pi's theme has no panel colors (the `system` theme when the terminal reports none) | Choose a theme in the Theme selector of `/settings`, such as `dark`, in a truecolor terminal |
 | Pills in colors you do not want | The colors come from the pi theme | Set `colors` and `fill` in the [settings](docs/configuration.md) |
 | Bold that looks no heavier than normal text | The terminal draws normal text at a medium weight, or its font has no real bold | Choose a font with a distinct bold. In Ghostty, `font-style-bold` selects a heavier face |
 | The agent writes no pills | The rules reach the agent only in Pi's terminal interface | Use the terminal interface. Print, JSON and RPC runs never get the rules |

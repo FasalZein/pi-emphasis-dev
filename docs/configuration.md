@@ -87,7 +87,7 @@ Other theme colors that work well for labels:
 
 ### colors
 
-The color of each tone. A tone is the color group of a pill word. Each value is a pi theme color name or `#rrggbb`. A theme color name follows `/theme` changes; a hex color stays the same in every theme.
+The color of each tone. A tone is the color group of a pill word. Each value is a pi theme color name or `#rrggbb`. A theme color name follows a theme change in the Theme selector of `/settings`; a hex color stays the same in every theme.
 
 | Tone | Words | Default color |
 |---|---|---|
@@ -122,6 +122,6 @@ By default, `ask` and `danger` are `solid` and the other tones are `panel`. That
 
 ## What has no setting
 
-- **The count line.** In a reply with 5 or more state pills (asks, wrong, open and settled words) of at least 2 different words, a line under the first paragraph shows one pill per word with its count. Asks come first. A reply that opens with a list gets the line above the list. The line waits until the reply is complete. A reply that already has a line of only pills gets no count line.
+- **The count line.** In a reply with 5 or more state pills (asks, wrong, open and settled words) of at least 2 different words, a line under the first paragraph shows one pill per word with its count. Asks come first. The line goes after the first paragraph or heading when a blank line closes it; otherwise, as in a reply that opens with a list, it goes above the first line. It never goes inside a list, a quote or code. The line counts the pills that are drawn: pills in code, inline code and HTML comments are not drawn and not counted. The line waits until the reply is complete. A reply that already has a line of only pills gets no count line. The count is per text block: pi hands the extension each text block of a message on its own, so a message with text before and after a tool call can show a count line for each block, or none when no block has 5 state pills.
 - **The rules.** The `reply_style` prompt section is the `REPLY_STYLE` constant in [`index.ts`](../index.ts).
 - **Words, synonyms and icons.** Edit the tables at the top of [`index.ts`](../index.ts).

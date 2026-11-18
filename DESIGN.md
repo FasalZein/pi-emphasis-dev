@@ -29,9 +29,9 @@ Components:
 States:
 - Streaming: no count line until the reply is complete (the line would move the text below it).
 - A reply that already holds a line of only pills (a written scoreboard): no count line.
-- Fenced code, inline code and escaped markers: untouched, as before.
-- A "$" before a digit in prose and headings is escaped for pi's Markdown, which would read it as the start of LaTeX math.
-- A reply that opens with a list takes the count line above the list, so the line never splits the list.
+- Code (fenced, also in quotes and lists; indented; inline), HTML comments and escaped markers: untouched, and their pills are neither drawn nor counted. Where the reader is not sure a line is prose, it treats it as code.
+- A "$" before a digit in prose and headings is escaped for pi's Markdown, which would read it as the start of LaTeX math; inline code and valid math such as $2^3$ stay as written.
+- The count line counts the pills that are drawn. It goes after a first paragraph or heading closed by a blank line, otherwise above the first line (a reply that opens with a list takes it above the list), so it never splits a list or enters code. It is per text block of a message, because pi transforms each block on its own.
 - A setting that names a color the pi theme does not know falls back to that field's default.
 Copy (the reply_style section, c3):
   The terminal draws [[Word]] as a colored pill and gives a bold lead label an icon.

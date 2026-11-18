@@ -31,10 +31,10 @@ All rules live in `index.ts` and are tested in `test/` without Pi running: `emph
 - Which lead-in words take an icon after a pill: `ACTION_ICONS`.
 - What the settings may hold and their defaults: `readSettings` and `DEFAULT_SETTINGS`; docs/configuration.md describes them for people.
 - How a tone becomes escapes: `createPalette` (`PANEL_MIX`, the contrast pick for solid pills, the 256-color fallback).
-- When and where the count line appears: `countLine` and `COUNT_LINE_MIN`.
+- When and where the count line appears: `tally`, `countPlace` and `COUNT_LINE_MIN`; `countLine` gives it for a reply.
 - What the agent is told: `REPLY_STYLE`, fixed text; `test/reply-style.test.ts` checks that each word it names is in the tables above.
 - How a pill label splits into icon, word and detail: `splitLabel`.
-- What is left untouched (fenced code, inline code, escaped markers): `decorate` and `decorateLine`.
+- What is prose and what stays untouched (code in any container, inline code, HTML comments, escaped markers): `readMarkdown`, shared by the drawing (`drawProse`, `drawHeading`) and the count line.
 
 ## Border
 
