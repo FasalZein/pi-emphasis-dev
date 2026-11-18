@@ -11,7 +11,7 @@
 // Fork of https://github.com/johnlindquist/pi-emphasis at commit f884b73 (see README.md, "This fork").
 // The design of this fork's look and rules is DESIGN.md; every setting is in docs/configuration.md.
 // Changes against upstream:
-//   - The prompt section is the compact tested text REPLY_STYLE (358 tokens against 2,419 for
+//   - The prompt section is the compact tested text REPLY_STYLE (310 tokens against 2,419 for
 //     upstream's replyGuidance()).
 //   - Needs you and Decision have their own tone, "ask", drawn solid.
 //   - Pill colors are tinted panels taken from the current pi theme; icons are one family of
@@ -832,16 +832,16 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
 
 /**
  * The reply_style section content. Pi wraps a section as <reply_style>\n…\n</reply_style>.
- * This is rule set c3 of the 2026-11-18 evaluation (358 tokens on cpa/claude-opus-5-5, see DESIGN.md).
- * Every kind, pill and lead-in word here must stay a known word of the tables above
+ * This is rule set c4g of the 2026-11-18 rules round (310 tokens on cpa/claude-opus-5-5, see DESIGN.md).
+ * Every kind, pill, lead-in and consequence word here must stay a known word of the tables above
  * (test/reply-style.test.ts checks this).
  */
 export const REPLY_STYLE = `The terminal draws [[Word]] as a colored pill and gives a bold lead label an icon.
-- Open with a bold label: **Result:** ... When the reply has several subjects, put a kind-of-work pill first: [[Implement]] **Result:** ... Kinds: Brainstorm, Investigate, Preview, Implement, Qualify.
-- Long reply: a ## heading per group; each bullet **Subject** [[Pill]] text.
-- Pills: [[Done]] [[Passed]] [[Fixed]] [[Observed]] [[Recommended]] [[Failed]] [[Blocked]] [[Partial]] [[In progress]] [[Unverified]] [[At risk]] [[Needs you]] [[Decision]] [[Destructive]] [[Costs money]] [[Shared]].
+- Open with **Result:**.
+- Long reply: open with [[Kind]] **Result:**, Kind one of Brainstorm, Investigate, Preview, Implement, Qualify; a ## heading per group; each bullet **Subject** [[Pill]] text.
+- Pills: Done, Passed, Fixed, Observed, Recommended, Failed, Blocked, Partial, In progress, Unverified, At risk, Needs you, Decision, Destructive, Costs money, Shared.
 - After a pill, the step that resolves it, led by a bold Do:, Check:, Next:, Unblock:, Left:, Guard:, Undo: or See:.
-- Keep pills out of code, paths and commands.`;
+- Costs money and Destructive: once, before an action that waits for approval. Mention a cost only there, or when it passes the approved amount.`;
 
 /** The escapes a palette is built from, as one string: equal keys build equal palettes. */
 export function themeKey(theme: ThemeLike, settings: EmphasisSettings): string {

@@ -4,7 +4,7 @@
 
 This is a fork of [pi-emphasis](https://github.com/johnlindquist/pi-emphasis) by John Lindquist, at commit `f884b73`. The drawing code (pills, labels, lead-ins, marks, trees) comes from upstream. The fork differs in four ways:
 
-- **Compact rules.** The `reply_style` prompt section is a short tested rule set of 358 tokens, in place of upstream's guidance of 2,419 tokens. In a test with the same prompts, it gave the same reply shape as upstream's guidance: a kind-of-work pill, `##` sections, and a pill right after each subject. The rules are the `REPLY_STYLE` constant in [`index.ts`](index.ts).
+- **Compact rules.** The `reply_style` prompt section is a short tested rule set of 310 tokens, in place of upstream's guidance of 2,419 tokens. In a test with the same prompts, it gave the same reply shape as upstream's guidance: a kind-of-work pill, `##` sections, and a pill right after each subject. The rules are the `REPLY_STYLE` constant in [`index.ts`](index.ts).
 - **A new look.** Pill colors come from the current pi theme. All icons are circles of one size. Needs you and Decision are solid yellow, so they stand apart from status pills. A count line of the reply's pills appears under the first paragraph. [DESIGN.md](DESIGN.md) records each decision.
 - **Settings.** An optional `emphasis` block in pi's `settings.json` sets the pill ends, the icons, the label color, and the color and fill of each tone. See [docs/configuration.md](docs/configuration.md).
 - **No environment switches.** The four `PI_EMPHASIS_*` environment variables are gone. The rules are always on in the terminal interface.
@@ -93,13 +93,13 @@ You should see four rounded pills, each with an icon: Done on a green panel, Nee
 
 An agent writes pills only when it is told how. In Pi's terminal interface the extension adds a `reply_style` section to the system prompt on every run, so there is nothing to paste into an `AGENTS.md`. The section tells the agent:
 
-- to open with a bold label such as **Result:**, and to put a kind-of-work pill first when the reply has several subjects: Brainstorm, Investigate, Preview, Implement or Qualify
-- to give a long reply a `##` heading per group, and to write each bullet as **Subject** [[Pill]] text
+- to open with **Result:**
+- to open a long reply with a kind-of-work pill (Brainstorm, Investigate, Preview, Implement or Qualify) before **Result:**, to give it a `##` heading per group, and to write each bullet as **Subject** [[Pill]] text
 - to use these pill words: Done, Passed, Fixed, Observed, Recommended, Failed, Blocked, Partial, In progress, Unverified, At risk, Needs you, Decision, Destructive, Costs money, Shared
 - to follow a pill with the step that resolves it, led by a bold Do:, Check:, Next:, Unblock:, Left:, Guard:, Undo: or See:
-- to keep pills out of code, paths and commands
+- to put Costs money or Destructive once, before an action that waits for your approval, and to mention a cost only there or when it passes the amount you approved
 
-The section is fixed text. A test checks that every kind, pill word and lead-in it names gets its color and icon, so the rules and the drawing cannot drift apart. It adds 358 tokens to the prompt, measured on claude-opus-5-5. Print, JSON and RPC runs do not get the section, since nothing there draws pills.
+The section is fixed text. A test checks that every kind, pill word and lead-in it names gets its color and icon, so the rules and the drawing cannot drift apart. It adds 310 tokens to the prompt, measured on claude-opus-5-5 (188 by tiktoken o200k_base). Print, JSON and RPC runs do not get the section, since nothing there draws pills.
 
 ## Pills
 

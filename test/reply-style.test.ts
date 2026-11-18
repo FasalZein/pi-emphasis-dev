@@ -1,15 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import register, { toneOf } from "../index.ts";
 
-// The tested rules: rule set c3 of the 2026-11-18 evaluation (358 tokens, DESIGN.md). Pi renders a
+// The tested rules: rule set c4g of the 2026-11-18 rules round (310 tokens, DESIGN.md). Pi renders a
 // section as "<name>\n" + content + "\n</name>" (dist/core/system-prompt.js).
-const RULES_C3 = `<reply_style>
+const RULES = `<reply_style>
 The terminal draws [[Word]] as a colored pill and gives a bold lead label an icon.
-- Open with a bold label: **Result:** ... When the reply has several subjects, put a kind-of-work pill first: [[Implement]] **Result:** ... Kinds: Brainstorm, Investigate, Preview, Implement, Qualify.
-- Long reply: a ## heading per group; each bullet **Subject** [[Pill]] text.
-- Pills: [[Done]] [[Passed]] [[Fixed]] [[Observed]] [[Recommended]] [[Failed]] [[Blocked]] [[Partial]] [[In progress]] [[Unverified]] [[At risk]] [[Needs you]] [[Decision]] [[Destructive]] [[Costs money]] [[Shared]].
+- Open with **Result:**.
+- Long reply: open with [[Kind]] **Result:**, Kind one of Brainstorm, Investigate, Preview, Implement, Qualify; a ## heading per group; each bullet **Subject** [[Pill]] text.
+- Pills: Done, Passed, Fixed, Observed, Recommended, Failed, Blocked, Partial, In progress, Unverified, At risk, Needs you, Decision, Destructive, Costs money, Shared.
 - After a pill, the step that resolves it, led by a bold Do:, Check:, Next:, Unblock:, Left:, Guard:, Undo: or See:.
-- Keep pills out of code, paths and commands.
+- Costs money and Destructive: once, before an action that waits for approval. Mention a cost only there, or when it passes the approved amount.
 </reply_style>`;
 
 // The two events the entry handles: before_agent_start (event) and session_start (ctx).
@@ -51,7 +51,7 @@ describe("reply_style prompt section", () => {
 	test("terminal mode adds exactly the tested rules as the reply_style section", () => {
 		const sections = load("tui").sections();
 		expect(Object.keys(sections)).toEqual(["reply_style"]);
-		expect(`<reply_style>\n${sections.reply_style}\n</reply_style>`).toBe(RULES_C3);
+		expect(`<reply_style>\n${sections.reply_style}\n</reply_style>`).toBe(RULES);
 	});
 
 	test.each(["print", "json", "rpc"])("%s mode adds no prompt section and draws nothing", (mode) => {
@@ -62,10 +62,11 @@ describe("reply_style prompt section", () => {
 });
 
 // The words the rules teach, read from the rules text itself.
-const label = RULES_C3.match(/bold label: \*\*(\w+):\*\*/)![1];
-const kinds = RULES_C3.match(/Kinds: ([^.]+)\./)![1].split(", ");
-const pillWords = [...RULES_C3.match(/- Pills: (.+)\./)![1].matchAll(/\[\[([^\]]+)\]\]/g)].map((m) => m[1]);
-const leadIns = [...RULES_C3.match(/led by a bold (.+)\./)![1].matchAll(/(\w+):/g)].map((m) => m[1]);
+const label = RULES.match(/Open with \*\*(\w+):\*\*/)![1];
+const kinds = RULES.match(/Kind one of ([^;]+);/)![1].split(", ");
+const pillWords = RULES.match(/- Pills: (.+)\.\n/)![1].split(", ");
+const leadIns = [...RULES.match(/led by a bold (.+)\.\n/)![1].matchAll(/(\w+):/g)].map((m) => m[1]);
+const consequences = RULES.match(/- (.+) and (\w+): once,/)!.slice(1);
 
 describe("every word the rules teach is drawn", () => {
 	test("the rules text names 1 label, 5 kinds, 16 pills and 8 lead-ins", () => {
@@ -73,6 +74,14 @@ describe("every word the rules teach is drawn", () => {
 		expect(kinds).toEqual(["Brainstorm", "Investigate", "Preview", "Implement", "Qualify"]);
 		expect(pillWords.length).toBe(16);
 		expect(leadIns).toEqual(["Do", "Check", "Next", "Unblock", "Left", "Guard", "Undo", "See"]);
+	});
+
+	test("the cost rule names two pill words of the list, both drawn as consequences", () => {
+		expect(consequences).toEqual(["Costs money", "Destructive"]);
+		for (const word of consequences) {
+			expect(pillWords).toContain(word);
+			expect(toneOf(word)).toBe("danger");
+		}
 	});
 
 	test("the label gets an icon as a line's lead label, also after a kind-of-work pill", () => {
