@@ -8,7 +8,7 @@ import { Marked, type Token } from "marked";
 import { DEFAULT_SETTINGS, VOCABULARY, readSettings } from "../index.ts";
 import { countPlace, readMarkdown } from "../reader.ts";
 import { piShown } from "./oracle.ts";
-import { countLineOf, drawnCount, load } from "./seam.ts";
+import { countLineOf, countWords, load } from "./seam.ts";
 
 const TONES = ["success", "error", "warning", "ask", "danger", "mode", "owner", "neutral"] as const;
 const COLOR = /^(#[0-9a-fA-F]{6}|[A-Za-z][A-Za-z0-9]*)$/;
@@ -73,7 +73,7 @@ test("the count line counts every state pill outside code, asks first, when ther
 		const expected = total >= 5 && tally.size >= 2
 			? [...tally.keys()].sort((a, b) => tone(a) - tone(b)).map((w) => "[[" + w + " " + tally.get(w) + "]]").join(" ")
 			: undefined;
-		expect(countLineOf(ext, md)).toBe(drawnCount(ext, expected));
+		expect(countWords(countLineOf(ext, md))).toBe(expected);
 	}));
 const codeText = gs.text({ alphabet: "ab [*]$\\_D1:→✓├─#", minSize: 1, maxSize: 16 });
 
@@ -209,7 +209,7 @@ function checkCount(md: string, prose: string[], code: string[]) {
 	const once = ansi.draw(md, true);
 	expect(pillCount(once)).toBe(prose.length);
 	for (const c of code) expect(once).toContain(c);
-	expect(countLineOf(ansi, md)).toBe(drawnCount(ansi, expectedCount(prose)));
+	expect(countWords(countLineOf(ansi, md))).toBe(expectedCount(prose));
 	const out = ansi.draw(md);
 	expect(countLineOf(ansi, out)).toBeUndefined();
 	expect(pillCount(ansi.draw(out))).toBe(pillCount(out));
@@ -311,7 +311,7 @@ for (const [name, prose, code] of COUNT_CASES) {
 		const md = REVIEW[name];
 		expect(prosePills(md)).toEqual(prose);
 		for (const c of code) expect(untouched(md, c)).toBe(true);
-		expect(countLineOf(ext, md)).toBe(drawnCount(ext, expectedCount(prose)));
+		expect(countWords(countLineOf(ext, md))).toBe(expectedCount(prose));
 	});
 }
 

@@ -20,8 +20,6 @@ export interface Loaded {
 	draw(markdown: string, streaming?: boolean, messageType?: string): string;
 	/** The prompt sections the extension sets before a run. */
 	sections(): Record<string, string>;
-	/** The surfaces the transformer was registered for. */
-	messageTypes: readonly string[] | undefined;
 }
 
 /**
@@ -50,7 +48,6 @@ export function load(theme: unknown, emphasis?: unknown, mode = "tui"): Loaded {
 			for (const h of handlers.before_agent_start ?? []) h(event);
 			return event.systemPromptOptions.sections;
 		},
-		messageTypes,
 	};
 }
 
@@ -67,8 +64,22 @@ export function countLineOf(ext: Loaded, markdown: string): string | undefined {
 	return out[i];
 }
 
-/** The drawing of a written count line such as "[[Done 2]] [[Failed 1]]", for comparison with countLineOf. */
-export const drawnCount = (ext: Loaded, text: string | undefined) => (text === undefined ? undefined : ext.draw(text));
+// A drawn pill's visible text sits between bold on and the bold/reverse reset (pill() in index.ts).
+const PILL_TEXT = /\x1b\[1m([^\x1b]*)\x1b\[22;27m/g;
+const ESCAPE = /\x1b\[[0-9;a-zA-Z-]*m/g;
+const ICON = /^(?:[\ue000-\uf8ff]|[\u{f0000}-\u{ffffd}])\u2002/u;
+const EDGES = /[\ue0b4\ue0b6\u2590\u258c\s]/g;
+/**
+ * The words and counts a drawn count line shows, written back as "[[Done 2]] [[Failed 1]]" for comparison
+ * with expected text written in the test. The pill words are read, never rendered from the expectation, so a
+ * wrong word or count in the drawing shows here. A line with anything besides pills comes back unchanged.
+ */
+export function countWords(line: string | undefined): string | undefined {
+	if (line === undefined) return undefined;
+	const words = [...line.matchAll(PILL_TEXT)].map((m) => "[[" + m[1].replace(ICON, "").replace(/\u00a0/g, " ").trim() + "]]");
+	const rest = line.replace(PILL_TEXT, "").replace(ESCAPE, "").replace(EDGES, "");
+	return words.length > 0 && rest === "" ? words.join(" ") : line;
+}
 
 const TONES = ["success", "error", "warning", "ask", "danger", "mode", "owner", "neutral"] as const;
 // Each tone gets its own color name and fill "text", so a pill's opening escape names its tone.
@@ -81,7 +92,10 @@ const toneExt = load(toneTheme, {
 	colors: Object.fromEntries(TONES.map((t) => [t, "is" + t])),
 	fill: Object.fromEntries(TONES.map((t) => [t, "text"])),
 });
-/** The tone the extension draws a pill label in, read from the drawn pill's color. */
-export function toneOf(label: string): string | undefined {
-	return toneExt.draw("x [[" + label + "]]").match(/\x1b\[38;tone-is(\w+)m\x1b\[1m/)?.[1];
+/** The tone the extension draws a pill label in, read from the drawn pill's color. Throws when no pill color shows. */
+export function toneOf(label: string): string {
+	const drawn = toneExt.draw("x [[" + label + "]]");
+	const tone = drawn.match(/\x1b\[38;tone-is(\w+)m\x1b\[1m/)?.[1];
+	if (tone === undefined) throw new Error("no pill tone in the drawing of " + JSON.stringify(label) + ": " + JSON.stringify(drawn));
+	return tone;
 }

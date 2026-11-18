@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_SETTINGS, readSettings } from "../index.ts";
 import { countPlace, readMarkdown } from "../reader.ts";
-import { countLineOf, drawnCount, load, type Theme } from "./seam.ts";
+import { countLineOf, countWords, load, type Theme } from "./seam.ts";
 
 // A truecolor theme with tokyonight's values (themes/tokyonight.json), so escapes carry RGB.
 const RGB: Record<string, [number, number, number]> = {
@@ -19,7 +19,8 @@ const truecolor: Theme = {
 const draw = (md: string, settings: Partial<ReturnType<typeof readSettings>> = {}, streaming = false) =>
 	load(truecolor, { ...DEFAULT_SETTINGS, ...settings }).draw(md, streaming);
 const ext = load(truecolor);
-const countLine = (md: string) => countLineOf(ext, md);
+// The count line's visible words and counts, as "[[Done 2]] [[Failed 1]]".
+const countLine = (md: string) => countWords(countLineOf(ext, md));
 
 describe("pill colors from the theme", () => {
 	test("a panel mixes 22% of the tone color into toolPendingBg, with the tone color as text", () => {
@@ -86,7 +87,7 @@ const REPLY = [
 
 describe("count line", () => {
 	test("one pill per word with its count, asks first, then wrong, open and settled", () =>
-		expect(countLine(REPLY)).toBe(drawnCount(ext, "[[Needs you 1]] [[Decision 1]] [[In progress 1]] [[Passed 1]] [[Done 1]]")));
+		expect(countLine(REPLY)).toBe("[[Needs you 1]] [[Decision 1]] [[In progress 1]] [[Passed 1]] [[Done 1]]"));
 	test("it goes after the first paragraph", () => {
 		const lines = draw(REPLY).split("\n");
 		expect(lines[1]).toBe("");
@@ -103,7 +104,7 @@ describe("count line", () => {
 		expect(countLine(md)).toBeUndefined();
 	});
 	test("detail and synonyms count as their word", () =>
-		expect(countLine("x\n\n- [[Passed 12/12]]\n- [[Pass]]\n- [[Completed]]\n- [[Done]]\n- [[Fail: 3]]")).toBe(drawnCount(ext, "[[Failed 1]] [[Passed 2]] [[Done 2]]")));
+		expect(countLine("x\n\n- [[Passed 12/12]]\n- [[Pass]]\n- [[Completed]]\n- [[Done]]\n- [[Fail: 3]]")).toBe("[[Failed 1]] [[Passed 2]] [[Done 2]]"));
 	test("kinds of work, consequences and ownership do not count", () =>
 		expect(countLine("x\n\n- [[Implement]]\n- [[Costs money]]\n- [[Shared]]\n- [[Done]]\n- [[Failed]]")).toBeUndefined());
 });
