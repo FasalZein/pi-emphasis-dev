@@ -168,8 +168,18 @@ const KNOWN = [...new Set([...Object.values(TONE_WORDS).flat(), ...Object.keys(W
 
 type SplitLabel = { icon: string | undefined; word: string; key: string };
 /**
- * Memo of splitLabel per icon table (undefined: no icons), since a reply draws, tones and counts the same few
- * labels many times. Labels come from reply text, so each memo is cleared when it reaches LABEL_MEMO_MAX.
+ * A copy of text that shares no memory with it. A slice of a reply (a line, a label) keeps the whole reply
+ * alive in V8 and JavaScriptCore; whatever outlives the call (the streaming cache, the memos) is detached first.
+ * The JSON round trip keeps every UTF-16 code unit, lone surrogates included.
+ */
+const detach = (text: string): string => JSON.parse(JSON.stringify(text)) as string;
+
+/**
+ * Memo of splitLabel per icon table (undefined: no icons; three tables at most), since a reply draws, tones and
+ * counts the same few labels many times. Keys are detached labels of at most 32 UTF-16 units (the pill
+ * pattern), and each memo is cleared when it reaches LABEL_MEMO_MAX entries, so one memo keeps at most 512 short
+ * strings and their split. 512 is enough for one reply: the corpus reply with the most pills (every pill word)
+ * has 41 distinct labels, the others 16 or fewer; a reply with more only rebuilds the memo, with the same output.
  */
 const LABEL_MEMO_MAX = 512;
 const labelMemo = new Map<Record<string, string> | undefined, Map<string, SplitLabel>>();
@@ -179,7 +189,8 @@ function splitLabel(label: string, icons?: Record<string, string>): SplitLabel {
 	let split = memo.get(label);
 	if (!split) {
 		if (memo.size >= LABEL_MEMO_MAX) memo.clear();
-		memo.set(label, (split = readLabel(label, icons)));
+		const key = detach(label);
+		memo.set(key, (split = readLabel(key, icons)));
 	}
 	return split;
 }
@@ -361,17 +372,20 @@ interface Drawing {
 }
 
 /**
- * The drawn finished blocks of the reply streaming now: text is the reply up to and including the line
- * break after a finished-block boundary, the rest is its drawing, reading and pills. One per extension
- * instance; reused only while the palette is the same and the reply starts with text.
+ * The drawn finished blocks of the reply streaming now: the head text is the first `length` characters of the
+ * reply, up to and including the line break after a finished-block boundary. One per extension instance; built
+ * only by streaming calls, and reused only while the palette is the same and the reply starts with the head text.
+ * It keeps no slice of an earlier reply: `source` is the reply of the latest call that used it, and the
+ * drawing and pills are detached copies, so it holds one reply's head, not every frame's reply.
  */
 interface Head {
 	palette: Palette;
-	text: string;
-	/** The drawn lines of text, joined, plus the line break after them. */
+	source: string;
+	length: number;
+	/** The drawn lines of the head text, joined, plus the line break after them (detached pieces). */
 	out: string;
-	lines: string[];
 	read: ReadLine[];
+	/** Detached labels of the pills drawn in the head. */
 	pills: string[];
 	scoreboard: boolean;
 }
@@ -414,27 +428,29 @@ function draw(lines: string[], palette: Palette): Drawing {
  */
 function decorate(markdown: string, palette: Palette, streaming = false, cache?: { head?: Head }): string {
 	let head = cache?.head;
-	if (head && (head.palette !== palette || !markdown.startsWith(head.text))) head = undefined;
-	const restText = head ? markdown.slice(head.text.length) : markdown;
+	if (head && (head.palette !== palette || markdown.length < head.length || !markdown.startsWith(head.source.slice(0, head.length)))) head = undefined;
+	if (head) head.source = markdown;
+	const restText = head ? markdown.slice(head.length) : markdown;
 	const lines = restText.split("\n");
 	const drawing = draw(lines, palette);
 	const drawn = drawing.lines.join("\n");
 	const scoreboard = (head?.scoreboard ?? false) || drawing.scoreboard;
-	const pills = head ? [...head.pills, ...drawing.pills] : drawing.pills;
 	// The count line waits for the whole reply: drawn while streaming, it would move the text below it.
-	const line = streaming || scoreboard ? undefined : tally(pills);
+	const line = streaming || scoreboard ? undefined : tally(head ? [...head.pills, ...drawing.pills] : drawing.pills);
 	let out: string;
 	if (line) {
-		const all = head ? [...head.lines, ...drawing.lines] : [...drawing.lines];
+		// A drawn line holds no line break, so the head's drawing splits back into its lines.
+		const all = head ? [...head.out.slice(0, -1).split("\n"), ...drawing.lines] : [...drawing.lines];
 		const [open, close] = boldEnds(palette);
 		all.splice(countPlace(head ? [...head.read, ...drawing.read] : drawing.read), 0, drawProse(line, [], palette, open, close), "");
 		out = all.join("\n");
 	} else out = (head?.out ?? "") + drawn;
-	// Move the newly finished blocks into the head. The boundary line must end with a line break here, so
-	// that the head's text is a prefix of this reply.
-	if (cache && drawing.boundary >= 0 && drawing.boundary < lines.length - 1) {
+	// Streaming only: move the newly finished blocks into the head. A finished reply (the last call, a history
+	// load, a width change) is drawn once per change and builds none. The boundary line must end with a line
+	// break here, so that the head text is a prefix of this reply.
+	if (cache && streaming && drawing.boundary >= 0 && drawing.boundary < lines.length - 1) {
 		const n = drawing.boundary + 1;
-		const next: Head = head ?? { palette, text: "", out: "", lines: [], read: [], pills: [], scoreboard: false };
+		const next: Head = head ?? { palette, source: markdown, length: 0, out: "", read: [], pills: [], scoreboard: false };
 		// Lines 0..n-1 with their line breaks, cut from the joined text and drawing instead of joined again.
 		let textLength = 0;
 		let outLength = 0;
@@ -442,13 +458,11 @@ function decorate(markdown: string, palette: Palette, streaming = false, cache?:
 			textLength += lines[i].length + 1;
 			outLength += drawing.lines[i].length + 1;
 		}
-		next.text += restText.slice(0, textLength);
-		next.out += drawn.slice(0, outLength);
-		for (let i = 0; i < n; i++) {
-			next.lines.push(drawing.lines[i]);
-			next.read.push(drawing.read[i]);
-		}
-		for (let i = 0; i < drawing.pillsAtBoundary; i++) next.pills.push(drawing.pills[i]);
+		next.length += textLength;
+		// Each character is detached once per reply: when its block finishes.
+		next.out += detach(drawn.slice(0, outLength));
+		for (let i = 0; i < n; i++) next.read.push(drawing.read[i]);
+		for (let i = 0; i < drawing.pillsAtBoundary; i++) next.pills.push(detach(drawing.pills[i]));
 		next.scoreboard ||= drawing.scoreboardAtBoundary;
 		head = next;
 	}
@@ -505,7 +519,7 @@ const ICON_SPACE = "\u2002";
 /** Edge glyphs: rounded Powerline caps (one cell), half blocks (half a cell), or none (sharp pads with a filled space). */
 const EDGE_GLYPHS: Record<Edges, [string, string]> = { round: ["\ue0b6", "\ue0b4"], half: ["\u2590", "\u258c"], sharp: ["", ""] };
 
-/** Memo of pill() per palette; cleared at LABEL_MEMO_MAX like the label memo. */
+/** Memo of pill() per palette, with detached keys and cleared at LABEL_MEMO_MAX like the label memo. */
 const pillMemo = new WeakMap<Palette, Map<string, string>>();
 function pill(label: string, palette: Palette): string {
 	let memo = pillMemo.get(palette);
@@ -513,7 +527,8 @@ function pill(label: string, palette: Palette): string {
 	let drawn = memo.get(label);
 	if (drawn === undefined) {
 		if (memo.size >= LABEL_MEMO_MAX) memo.clear();
-		memo.set(label, (drawn = drawPill(label, palette)));
+		const key = detach(label);
+		memo.set(key, (drawn = drawPill(key, palette)));
 	}
 	return drawn;
 }

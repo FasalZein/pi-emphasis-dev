@@ -36,14 +36,41 @@ for (const [name, reply] of Object.entries(REPLIES)) {
 	});
 }
 
-test("a different reply and a theme change do not reuse the cached blocks", () => {
-	let colors = 1;
-	const swapping = { ...theme, getFgAnsi: (name: string) => "\x1b[38;" + name + colors + "m" };
-	const ext = load({ get fg() { return swapping.fg; }, get getFgAnsi() { return swapping.getFgAnsi; }, getBgAnsi: theme.getBgAnsi, getColorMode: theme.getColorMode, get colors() { return { colors }; } });
-	const first = "Intro [[Done]]\n\nMore [[Failed]]\n\nEnd";
-	ext.draw(first, true);
+// A theme whose escapes name a version, and one colors object per version (as pi hands out one frozen colors
+// object until the colors change), so a palette rebuild happens only at an explicit switch.
+function versionedTheme() {
+	let version = 1;
+	let colors = { version };
+	return {
+		switch() {
+			version++;
+			colors = { version };
+		},
+		theme: {
+			fg: (name: string, text: string) => "\x1b[38;" + name + version + "m" + text + "\x1b[39m",
+			getFgAnsi: (name: string) => "\x1b[38;" + name + version + "m",
+			getBgAnsi: (name: string) => "\x1b[48;" + name + version + "m",
+			getColorMode: () => "256color",
+			get colors() {
+				return colors;
+			},
+		},
+	};
+}
+
+test("a different reply under the same palette does not reuse the cached blocks", () => {
+	const { theme: t } = versionedTheme();
+	const ext = load(t);
+	ext.draw("Intro [[Done]]\n\nMore [[Failed]]\n\nEnd", true);
 	const other = "Other [[Passed]]\n\nMore [[Failed]]\n\nEnd";
-	expect(ext.draw(other, true)).toBe(load(swapping).draw(other, true));
-	colors = 2;
-	expect(ext.draw(other, true)).toBe(load(swapping).draw(other, true));
+	expect(ext.draw(other, true)).toBe(load(t).draw(other, true));
+});
+
+test("a theme change does not reuse the cached blocks of the same reply", () => {
+	const v = versionedTheme();
+	const ext = load(v.theme);
+	const reply = "Intro [[Done]] **bold**\n\nMore [[Failed]]\n\nEnd";
+	ext.draw(reply, true);
+	v.switch();
+	expect(ext.draw(reply, true)).toBe(load(v.theme).draw(reply, true));
 });
