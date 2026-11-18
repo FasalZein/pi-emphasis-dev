@@ -14,7 +14,7 @@
   },
   "files": ["index.ts", "reader.ts", "README.md", "LICENSE", "DESIGN.md", "screenshots/"],
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=1.5.0 <2"
+    "@earendil-works/pi-coding-agent": ">=1.5.1 <2"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^1.5.0",

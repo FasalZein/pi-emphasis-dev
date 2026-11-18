@@ -1,14 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { VOCABULARY, createPalette, decorate, toneOf, type ThemeLike } from "../index.ts";
+import { VOCABULARY } from "../index.ts";
+import { load, toneOf } from "./seam.ts";
 
 // A theme whose colors are readable tags, so tests can assert on what was colored.
 const theme = {
 	fg: (color: string, text: string) => `<${color}>${text}</>`,
 	getFgAnsi: (color: string) => `\x1b[38;fg-${color}m`,
 	getBgAnsi: (color: string) => `\x1b[48;bg-${color}m`,
-} as unknown as ThemeLike;
-const palette = createPalette(theme);
-const plain = (text: string) => decorate(text, palette).replace(/\x1b\[[0-9;a-zA-Z-]*m/g, "").replace(/[\ue0b4\ue0b6]/g, "|").replace(/[\u00a0\u2002]/g, " ");
+};
+const ext = load(theme);
+const plain = (text: string) => ext.draw(text).replace(/\x1b\[[0-9;a-zA-Z-]*m/g, "").replace(/[\ue0b4\ue0b6]/g, "|").replace(/[\u00a0\u2002]/g, " ");
 
 describe("pill tone", () => {
 	test.each([

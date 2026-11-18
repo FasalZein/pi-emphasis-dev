@@ -1,0 +1,87 @@
+// The extension's seam for tests: the default export, loaded into a stand-in pi. The other seam is
+// reader.ts (readMarkdown, countPlace), which tests import directly.
+import register from "../index.ts";
+
+/** The slice of pi's Theme the extension reads. */
+export interface Theme {
+	fg(color: never, text: string): string;
+	getFgAnsi(color: never): string;
+	getBgAnsi(color: never): string;
+	getColorMode?(): string;
+}
+type Handler = (event: unknown, ctx?: unknown) => void;
+type Transformer = (markdown: string, context: { messageType: string; isStreaming?: boolean }) => string;
+type PromptEvent = { systemPromptOptions: { sections: Record<string, string> } };
+/** pi's default surfaces for a transformer registered without messageTypes (docs/extensions.md). */
+const PI_DEFAULT_TYPES = ["user", "assistant", "assistant-thinking"];
+
+export interface Loaded {
+	/** What pi hands its Markdown renderer for a message of this type after the extension's transformer. */
+	draw(markdown: string, streaming?: boolean, messageType?: string): string;
+	/** The prompt sections the extension sets before a run. */
+	sections(): Record<string, string>;
+	/** The surfaces the transformer was registered for. */
+	messageTypes: readonly string[] | undefined;
+}
+
+/**
+ * Loads the extension into a stand-in pi and starts a session in the given mode, with the theme and
+ * pi's settings.json "emphasis" block (undefined: no block).
+ */
+export function load(theme: unknown, emphasis?: unknown, mode = "tui"): Loaded {
+	const handlers: Record<string, Handler[]> = {};
+	let transform: Transformer | undefined;
+	let messageTypes: readonly string[] | undefined;
+	register({
+		on: (name: string, h: Handler) => (handlers[name] ??= []).push(h),
+		registerMarkdownTransformer: (t: Transformer, options?: { messageTypes?: readonly string[] }) => {
+			transform = t;
+			messageTypes = options?.messageTypes;
+		},
+		getSettings: () => (emphasis === undefined ? {} : { emphasis }),
+	} as never);
+	for (const h of handlers.session_start ?? []) h({}, { mode, ui: { theme } });
+	return {
+		// pi runs a transformer only on the surfaces it registered for.
+		draw: (markdown, streaming = false, messageType = "assistant") =>
+			(messageTypes ?? PI_DEFAULT_TYPES).includes(messageType) ? transform!(markdown, { messageType, isStreaming: streaming }) : markdown,
+		sections() {
+			const event: PromptEvent = { systemPromptOptions: { sections: {} } };
+			for (const h of handlers.before_agent_start ?? []) h(event);
+			return event.systemPromptOptions.sections;
+		},
+		messageTypes,
+	};
+}
+
+/**
+ * The count line as drawn into a finished reply: the line it holds that the streaming drawing (which
+ * waits with the count line) lacks. Undefined when the finished reply has no extra lines.
+ */
+export function countLineOf(ext: Loaded, markdown: string): string | undefined {
+	const out = ext.draw(markdown).split("\n");
+	const without = ext.draw(markdown, true).split("\n");
+	if (out.length === without.length) return undefined;
+	let i = 0;
+	while (out[i] === without[i]) i++;
+	return out[i];
+}
+
+/** The drawing of a written count line such as "[[Done 2]] [[Failed 1]]", for comparison with countLineOf. */
+export const drawnCount = (ext: Loaded, text: string | undefined) => (text === undefined ? undefined : ext.draw(text));
+
+const TONES = ["success", "error", "warning", "ask", "danger", "mode", "owner", "neutral"] as const;
+// Each tone gets its own color name and fill "text", so a pill's opening escape names its tone.
+const toneTheme = {
+	fg: (_: string, text: string) => text,
+	getFgAnsi: (name: string) => "\x1b[38;tone-" + name + "m",
+	getBgAnsi: (name: string) => "\x1b[48;" + name + "m",
+};
+const toneExt = load(toneTheme, {
+	colors: Object.fromEntries(TONES.map((t) => [t, "is" + t])),
+	fill: Object.fromEntries(TONES.map((t) => [t, "text"])),
+});
+/** The tone the extension draws a pill label in, read from the drawn pill's color. */
+export function toneOf(label: string): string | undefined {
+	return toneExt.draw("x [[" + label + "]]").match(/\x1b\[38;tone-is(\w+)m\x1b\[1m/)?.[1];
+}

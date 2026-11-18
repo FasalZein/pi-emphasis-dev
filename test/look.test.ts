@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import emphasis, { DEFAULT_SETTINGS, countLine, createPalette, decorate, readSettings, type EmphasisSettings, type ThemeLike } from "../index.ts";
+import { DEFAULT_SETTINGS, readSettings } from "../index.ts";
 import { countPlace, readMarkdown } from "../reader.ts";
+import { countLineOf, drawnCount, load, type Theme } from "./seam.ts";
 
 // A truecolor theme with tokyonight's values (themes/tokyonight.json), so escapes carry RGB.
 const RGB: Record<string, [number, number, number]> = {
@@ -9,14 +10,16 @@ const RGB: Record<string, [number, number, number]> = {
 	mdListBullet: [134, 225, 252], toolSuccessBg: [30, 43, 40], toolErrorBg: [44, 32, 48], searchMatchBg: [47, 51, 77],
 };
 const fgEsc = (name: string) => "\x1b[38;2;" + RGB[name].join(";") + "m";
-const truecolor: ThemeLike = {
+const truecolor: Theme = {
 	fg: (name: never, text: string) => fgEsc(name) + text + "\x1b[39m",
 	getFgAnsi: (name: never) => fgEsc(name),
 	getBgAnsi: (name: never) => "\x1b[48;2;" + RGB[name].join(";") + "m",
 	getColorMode: () => "truecolor",
 };
-const draw = (md: string, settings: Partial<EmphasisSettings> = {}, streaming = false) =>
-	decorate(md, createPalette(truecolor, { ...DEFAULT_SETTINGS, ...settings }), streaming);
+const draw = (md: string, settings: Partial<ReturnType<typeof readSettings>> = {}, streaming = false) =>
+	load(truecolor, { ...DEFAULT_SETTINGS, ...settings }).draw(md, streaming);
+const ext = load(truecolor);
+const countLine = (md: string) => countLineOf(ext, md);
 
 describe("pill colors from the theme", () => {
 	test("a panel mixes 22% of the tone color into toolPendingBg, with the tone color as text", () => {
@@ -47,7 +50,7 @@ describe("pill colors from the theme", () => {
 		const t256 = { ...truecolor, getColorMode: () => "256color" };
 		const settings = { ...DEFAULT_SETTINGS, colors: { ...DEFAULT_SETTINGS.colors, error: "#ff0000" } };
 		// #ff0000 is xterm-256 color 196.
-		expect(decorate("[[Failed]]", createPalette(t256, settings))).toContain("\x1b[38;5;196m");
+		expect(load(t256, settings).draw("[[Failed]]")).toContain("\x1b[38;5;196m");
 	});
 });
 
@@ -83,7 +86,7 @@ const REPLY = [
 
 describe("count line", () => {
 	test("one pill per word with its count, asks first, then wrong, open and settled", () =>
-		expect(countLine(REPLY)).toBe("[[Needs you 1]] [[Decision 1]] [[In progress 1]] [[Passed 1]] [[Done 1]]"));
+		expect(countLine(REPLY)).toBe(drawnCount(ext, "[[Needs you 1]] [[Decision 1]] [[In progress 1]] [[Passed 1]] [[Done 1]]")));
 	test("it goes after the first paragraph", () => {
 		const lines = draw(REPLY).split("\n");
 		expect(lines[1]).toBe("");
@@ -100,7 +103,7 @@ describe("count line", () => {
 		expect(countLine(md)).toBeUndefined();
 	});
 	test("detail and synonyms count as their word", () =>
-		expect(countLine("x\n\n- [[Passed 12/12]]\n- [[Pass]]\n- [[Completed]]\n- [[Done]]\n- [[Fail: 3]]")).toBe("[[Failed 1]] [[Passed 2]] [[Done 2]]"));
+		expect(countLine("x\n\n- [[Passed 12/12]]\n- [[Pass]]\n- [[Completed]]\n- [[Done]]\n- [[Fail: 3]]")).toBe(drawnCount(ext, "[[Failed 1]] [[Passed 2]] [[Done 2]]")));
 	test("kinds of work, consequences and ownership do not count", () =>
 		expect(countLine("x\n\n- [[Implement]]\n- [[Costs money]]\n- [[Shared]]\n- [[Done]]\n- [[Failed]]")).toBeUndefined());
 });
@@ -118,7 +121,7 @@ describe("review fixes", () => {
 	test("an unknown theme color name in the settings falls back to the default", () => {
 		const strict = { ...truecolor, getFgAnsi: (name: never) => { if (!RGB[name]) throw new Error("Unknown theme color: " + name); return fgEsc(name); } };
 		const settings = { ...DEFAULT_SETTINGS, labels: "teal", colors: { ...DEFAULT_SETTINGS.colors, success: "teal" } };
-		const out = decorate("**Cause:** [[Done]]", createPalette(strict, settings));
+		const out = load(strict, settings).draw("**Cause:** [[Done]]");
 		expect(out).toContain(fgEsc("mdLink") + "\uf0e7 Cause:");
 		expect(out).toContain("\x1b[38;2;195;232;141m");
 	});
@@ -150,18 +153,15 @@ describe("readSettings", () => {
 describe("theme switch", () => {
 	// Pi keeps one theme object and swaps what it holds when /settings selects another theme.
 	test("after a theme change the next draw uses the new theme's pill colors", () => {
-		const other: ThemeLike = { ...truecolor, getFgAnsi: (name: never) => (name === "success" ? "\x1b[38;2;1;200;3m" : fgEsc(name)) };
+		const other: Theme = { ...truecolor, getFgAnsi: (name: never) => (name === "success" ? "\x1b[38;2;1;200;3m" : fgEsc(name)) };
 		let current = truecolor;
-		const proxy = new Proxy({}, { get: (_, key) => (current as unknown as Record<string | symbol, unknown>)[key] }) as ThemeLike;
-		const handlers: Record<string, (event: unknown, ctx: unknown) => void> = {};
-		let transform: ((md: string, ctx: { messageType: string; isStreaming?: boolean }) => string) | undefined;
-		emphasis({ on: (name: string, h: never) => (handlers[name] = h), registerMarkdownTransformer: (t: never) => (transform = t), getSettings: () => ({}) } as never);
-		handlers.session_start({}, { mode: "tui", ui: { theme: proxy } });
-		const ctx = { messageType: "assistant", isStreaming: false };
-		expect(transform!("[[Done]]", ctx)).toBe(decorate("[[Done]]", createPalette(truecolor)));
+		const proxy = new Proxy({}, { get: (_, key) => (current as unknown as Record<string | symbol, unknown>)[key] }) as Theme;
+		const switched = load(proxy);
+		// The reference: a fresh load with each theme.
+		expect(switched.draw("[[Done]]")).toBe(load(truecolor).draw("[[Done]]"));
 		current = other;
-		expect(transform!("[[Done]]", ctx)).toBe(decorate("[[Done]]", createPalette(other)));
-		expect(transform!("[[Done]]", ctx)).toContain("\x1b[38;2;1;200;3m");
+		expect(switched.draw("[[Done]]")).toBe(load(other).draw("[[Done]]"));
+		expect(switched.draw("[[Done]]")).toContain("\x1b[38;2;1;200;3m");
 	});
 });
 

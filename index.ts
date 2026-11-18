@@ -23,13 +23,13 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { countPlace, readMarkdown, type Range } from "./reader.ts";
 
 type Colorize = (text: string) => string;
-export type PillTone = "success" | "error" | "warning" | "ask" | "danger" | "mode" | "owner" | "neutral";
-export type Edges = "round" | "half" | "sharp";
-export type IconSet = "filled" | "outline" | "none";
-export type Fill = "panel" | "solid" | "text";
+type PillTone = "success" | "error" | "warning" | "ask" | "danger" | "mode" | "owner" | "neutral";
+type Edges = "round" | "half" | "sharp";
+type IconSet = "filled" | "outline" | "none";
+type Fill = "panel" | "solid" | "text";
 
 /** The optional "emphasis" block of pi's settings.json. The README section "Settings" describes each field. */
-export interface EmphasisSettings {
+interface EmphasisSettings {
 	edges: Edges;
 	icons: IconSet;
 	/** Color of bold labels, lead-ins and bold text: a pi theme color name or "#rrggbb". */
@@ -40,6 +40,8 @@ export interface EmphasisSettings {
 }
 
 const TONES: PillTone[] = ["success", "error", "warning", "ask", "danger", "mode", "owner", "neutral"];
+// Test-only export: the defaults table, the expected value of every missing or invalid settings field
+// in test/properties.test.ts.
 export const DEFAULT_SETTINGS: EmphasisSettings = {
 	edges: "round",
 	icons: "filled",
@@ -55,6 +57,8 @@ const color = (value: unknown, fallback: string) => (typeof value === "string" &
 const record = (value: unknown) => (value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {});
 
 /** Reads the "emphasis" settings block. Missing or invalid fields take their default. */
+// Test-only export: the drawing cannot tell some kept values apart ("#FF966C" and "#ff966c" draw the same
+// color), so the per-field rule is checked here, in test/properties.test.ts and test/look.test.ts.
 export function readSettings(raw: unknown): EmphasisSettings {
 	const s = record(raw);
 	const colors = record(s.colors);
@@ -69,14 +73,14 @@ export function readSettings(raw: unknown): EmphasisSettings {
 	};
 }
 
-export interface PillStyle {
+interface PillStyle {
 	/** Opening escapes of the pill's body. */
 	label: string;
 	/** Foreground escape that draws the edges in the body's color; empty for a pill without edges. */
 	cap: string;
 }
 
-export interface Palette {
+interface Palette {
 	/** Wraps bold text in a color. */
 	bold: Colorize;
 	passed?: Colorize;
@@ -91,7 +95,7 @@ export interface Palette {
 }
 
 /** Minimal slice of Pi's Theme used to build a palette. */
-export interface ThemeLike {
+interface ThemeLike {
 	fg(color: never, text: string): string;
 	getFgAnsi(color: never): string;
 	getBgAnsi(color: never): string;
@@ -99,6 +103,8 @@ export interface ThemeLike {
 }
 
 /** Each tone's words. `core` are the words the tones were defined with; `also` are accepted and colored the same. */
+// Test-only export: the word list is the tests' oracle for tones and the count line (test/emphasis.test.ts,
+// test/properties.test.ts); the drawing shows a word's tone but not which words the list holds.
 export const VOCABULARY: Record<Exclude<PillTone, "neutral">, { core: string[]; also: string[] }> = {
 	error: { core: ["Failed", "Blocked", "Broken", "Unsafe"], also: ["fail", "failing", "error", "rejected", "down"] },
 	ask: { core: ["Needs you", "Decision"], also: [] },
@@ -116,7 +122,7 @@ const TONE_WORDS = Object.fromEntries(
  * Icon groups. Every glyph is a Nerd Font Material Design circle (or octagon) that measures 599x600
  * units in a Nerd Font Mono cell, centred on the cap height, so all pill icons have one size.
  */
-export const ICON_SETS: Record<Exclude<IconSet, "none">, Record<string, string>> = {
+const ICON_SETS: Record<Exclude<IconSet, "none">, Record<string, string>> = {
 	filled: {
 		settled: "\u{f05e0}", wrong: "\u{f0159}", blocked: "\u{f0376}", stop: "\u{f0029}", you: "\u{f0009}", decision: "\u{f02d7}",
 		unknown: "\u{f07c3}", progress: "\u{f040c}", pending: "\u{f0954}", partial: "\u{f1396}", skipped: "\u{f0661}", risk: "\u{f0028}",
@@ -180,7 +186,7 @@ function splitLabel(label: string, icons?: Record<string, string>): { icon: stri
 	return { icon: ownGlyph?.[1] ?? (icons && group ? own(icons, group) : undefined), word, key };
 }
 
-export function toneOf(label: string): PillTone {
+function toneOf(label: string): PillTone {
 	const { key } = splitLabel(label);
 	for (const tone of ["danger", "error", "ask", "warning", "success", "mode", "owner"] as const) {
 		if (TONE_WORDS[tone].includes(key)) return tone;
@@ -200,7 +206,7 @@ const rgbOf = (ansi: string): RGB | undefined => {
 };
 const hexRgb = (hex: string): RGB => [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16)) as RGB;
 /** The share of the tone color in a panel's background; the rest is the theme's toolPendingBg. */
-export const PANEL_MIX = 0.22;
+const PANEL_MIX = 0.22;
 const mix = (a: RGB, b: RGB, t: number): RGB => [0, 1, 2].map((i) => Math.round(a[i] * t + b[i] * (1 - t))) as RGB;
 const fgRgb = (c: RGB) => "\x1b[38;2;" + c.join(";") + "m";
 const bgRgb = (c: RGB) => "\x1b[48;2;" + c.join(";") + "m";
@@ -229,7 +235,7 @@ const LEGACY_BG: Record<PillTone, string> = {
 	success: "toolSuccessBg", error: "toolErrorBg", warning: "searchMatchBg", ask: "searchMatchBg", danger: "toolErrorBg", mode: "selectedBg", owner: "selectedBg", neutral: "selectedBg",
 };
 
-export function createPalette(theme: ThemeLike, settings: EmphasisSettings = DEFAULT_SETTINGS): Palette {
+function createPalette(theme: ThemeLike, settings: EmphasisSettings = DEFAULT_SETTINGS): Palette {
 	const truecolor = !theme.getColorMode || theme.getColorMode() === "truecolor";
 	// Pi's theme throws on a color name it does not know ("teal"); such a setting falls back to its default.
 	const known = (name: string) => {
@@ -294,7 +300,7 @@ const INLINE = /(?<!\\)(\\*)(\*\*|__)|\[\[([^\[\]\n]{1,32})\]\]/g;
 // A written scoreboard: a line of two or more pills and nothing else.
 const PILLS_ONLY = /^\s*\[\[[^\[\]\n]{1,32}\]\](?:\s*\[\[[^\[\]\n]{1,32}\]\])+\s*$/;
 /** The fewest state pills (ask, error, warning or success) a reply needs for a count line. */
-export const COUNT_LINE_MIN = 5;
+const COUNT_LINE_MIN = 5;
 const COUNT_ORDER: PillTone[] = ["ask", "error", "warning", "success"];
 const DISPLAY = Object.fromEntries(
 	Object.values(VOCABULARY)
@@ -348,19 +354,8 @@ function draw(markdown: string, palette: Palette): Drawing {
 	return { lines: out, pills, scoreboard, place: countPlace(read) };
 }
 
-const COUNT_PALETTE: Palette = { bold: (t) => t, pills: Object.fromEntries(TONES.map((t) => [t, { label: "", cap: "" }])) as Record<PillTone, PillStyle> };
-
-/**
- * The count line of a reply, from the pills that decorate draws. Undefined when it draws fewer than
- * COUNT_LINE_MIN state pills, only one state word, or the reply holds a line of only pills already.
- */
-export function countLine(markdown: string): string | undefined {
-	const drawing = draw(markdown, COUNT_PALETTE);
-	return drawing.scoreboard ? undefined : tally(drawing.pills);
-}
-
 /** Apply colors to assistant Markdown, leaving code, HTML comments and headings' text alone. */
-export function decorate(markdown: string, palette: Palette, streaming = false): string {
+function decorate(markdown: string, palette: Palette, streaming = false): string {
 	const drawing = draw(markdown, palette);
 	// The count line waits for the whole reply: drawn while streaming, it would move the text below it.
 	const line = streaming || drawing.scoreboard ? undefined : tally(drawing.pills);
@@ -517,7 +512,7 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
  * Every kind, pill, lead-in and consequence word here must stay a known word of the tables above
  * (test/reply-style.test.ts checks this).
  */
-export const REPLY_STYLE = `The terminal draws [[Word]] as a colored pill and gives a bold lead label an icon.
+const REPLY_STYLE = `The terminal draws [[Word]] as a colored pill and gives a bold lead label an icon.
 - Open with **Result:**.
 - Long reply: open with [[Kind]] **Result:**, Kind one of Brainstorm, Investigate, Preview, Implement, Qualify; a ## heading per group; each bullet **Subject** [[Pill]] text.
 - Pills: Done, Passed, Fixed, Observed, Recommended, Failed, Blocked, Partial, In progress, Unverified, At risk, Needs you, Decision, Destructive, Costs money, Shared.
@@ -525,7 +520,7 @@ export const REPLY_STYLE = `The terminal draws [[Word]] as a colored pill and gi
 - Costs money and Destructive: once, before an action that waits for approval. Mention a cost only there, or when it passes the approved amount.`;
 
 /** The escapes a palette is built from, as one string: equal keys build equal palettes. */
-export function themeKey(theme: ThemeLike, settings: EmphasisSettings): string {
+function themeKey(theme: ThemeLike, settings: EmphasisSettings): string {
 	const names = [...new Set(["success", "error", "accent", "dim", "text", settings.labels, ...Object.values(DEFAULT_SETTINGS.colors), ...Object.values(settings.colors)])];
 	const read = (get: (name: never) => string, name: string) => {
 		try {
@@ -558,13 +553,17 @@ export default function emphasis(pi: ExtensionAPI) {
 		if (currentTheme) sections.reply_style = REPLY_STYLE;
 		else delete sections.reply_style;
 	});
-	pi.registerMarkdownTransformer((markdown, context) => {
-		if (!currentTheme || context.messageType !== "assistant") return markdown;
-		// Rebuild when the theme's colors change. Pi keeps one theme object and swaps what it holds when
-		// the Theme selector of /settings switches themes, so the key is the colors, not the object.
-		const theme = currentTheme();
-		const key = themeKey(theme, settings);
-		if (built?.key !== key) built = { key, palette: createPalette(theme, settings) };
-		return decorate(markdown, built.palette, context.isStreaming === true);
-	});
+	pi.registerMarkdownTransformer(
+		(markdown, context) => {
+			if (!currentTheme) return markdown;
+			// Rebuild when the theme's colors change. Pi keeps one theme object and swaps what it holds when
+			// the Theme selector of /settings switches themes, so the key is the colors, not the object.
+			const theme = currentTheme();
+			const key = themeKey(theme, settings);
+			if (built?.key !== key) built = { key, palette: createPalette(theme, settings) };
+			return decorate(markdown, built.palette, context.isStreaming === true);
+		},
+		// Assistant replies only: pi (1.5.1 and later) skips user, thinking and other Markdown.
+		{ messageTypes: ["assistant"] },
+	);
 }

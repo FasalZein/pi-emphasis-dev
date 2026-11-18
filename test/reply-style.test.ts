@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import register, { toneOf } from "../index.ts";
+import { load as loadExtension, toneOf } from "./seam.ts";
 
 // The tested rules: rule set c4g of the 2026-11-18 rules round (310 tokens, DESIGN.md). Pi renders a
 // section as "<name>\n" + content + "\n</name>" (dist/core/system-prompt.js).
@@ -12,12 +12,6 @@ The terminal draws [[Word]] as a colored pill and gives a bold lead label an ico
 - Costs money and Destructive: once, before an action that waits for approval. Mention a cost only there, or when it passes the approved amount.
 </reply_style>`;
 
-// The two events the entry handles: before_agent_start (event) and session_start (ctx).
-type PromptEvent = { systemPromptOptions: { sections: Record<string, string> } };
-type SessionCtx = { mode: string; ui: { theme: typeof theme } };
-type Handler = (event: PromptEvent | Record<string, never>, ctx?: SessionCtx) => void;
-type Transformer = (markdown: string, context: { messageType: string }) => string;
-
 // A theme with its own panel colors; every color name maps to a fixed escape.
 const theme = {
 	fg: (name: string, text: string) => `\x1b[38;5;${name.length}m${text}\x1b[39m`,
@@ -25,25 +19,8 @@ const theme = {
 	getBgAnsi: (name: string) => `\x1b[48;5;${name.length + 100}m`,
 };
 
-// Stand-in pi API: records on() handlers and the markdown transformer of the real entry.
-function load(mode: string, settings: Record<string, unknown> = {}) {
-	const handlers: Record<string, Handler[]> = {};
-	let transform: Transformer | undefined;
-	register({
-		on: (name: string, h: Handler) => (handlers[name] ??= []).push(h),
-		registerMarkdownTransformer: (t: Transformer) => (transform = t),
-		getSettings: () => settings,
-	} as never);
-	for (const h of handlers.session_start ?? []) h({}, { mode, ui: { theme } });
-	return {
-		sections() {
-			const event: PromptEvent = { systemPromptOptions: { sections: {} } };
-			for (const h of handlers.before_agent_start ?? []) h(event);
-			return event.systemPromptOptions.sections;
-		},
-		draw: (markdown: string) => transform!(markdown, { messageType: "assistant" }),
-	};
-}
+// The real entry in a stand-in pi (test/seam.ts), with pi's settings.json content.
+const load = (mode: string, settings: { emphasis?: unknown } = {}) => loadExtension(theme, settings.emphasis, mode);
 
 const ICON = /(?:[\ue000-\uf8ff]|[\u{f0000}-\u{ffffd}])/u;
 
@@ -59,6 +36,10 @@ describe("reply_style prompt section", () => {
 		expect(ext.sections()).toEqual({});
 		expect(ext.draw("**Result:** [[Done]]")).toBe("**Result:** [[Done]]");
 	});
+});
+
+test.each(["user", "assistant-thinking", "custom", "summary", "changelog"])("%s Markdown reaches pi unchanged", (type) => {
+	expect(load("tui").draw("**Result:** [[Done]]", false, type)).toBe("**Result:** [[Done]]");
 });
 
 // The words the rules teach, read from the rules text itself.

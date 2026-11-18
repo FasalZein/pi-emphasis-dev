@@ -5,9 +5,10 @@ import * as hegel from "@hegeldev/hegel";
 import * as gs from "@hegeldev/hegel/generators";
 import { Markdown, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { Marked, type Token } from "marked";
-import { DEFAULT_SETTINGS, VOCABULARY, countLine, createPalette, decorate, readSettings } from "../index.ts";
+import { DEFAULT_SETTINGS, VOCABULARY, readSettings } from "../index.ts";
 import { countPlace, readMarkdown } from "../reader.ts";
 import { piShown } from "./oracle.ts";
+import { countLineOf, drawnCount, load } from "./seam.ts";
 
 const TONES = ["success", "error", "warning", "ask", "danger", "mode", "owner", "neutral"] as const;
 const COLOR = /^(#[0-9a-fA-F]{6}|[A-Za-z][A-Za-z0-9]*)$/;
@@ -44,6 +45,13 @@ test("readSettings keeps a valid field and replaces any other value with the def
 		expect(Object.keys(s.colors).sort()).toEqual([...TONES].sort());
 	}));
 
+const theme = {
+	fg: (c: string, t: string) => "<" + c + ">" + t + "</>",
+	getFgAnsi: (c: string) => "\x1b[38;fg-" + c + "m",
+	getBgAnsi: (c: string) => "\x1b[48;bg-" + c + "m",
+};
+const ext = load(theme);
+
 // The count line's oracle, built from VOCABULARY rather than from the renderer's own tone lookup.
 const STATE = ["ask", "error", "warning", "success"] as const;
 const stateWords = STATE.flatMap((t) => VOCABULARY[t].core.map((w) => [w, t] as const));
@@ -65,15 +73,8 @@ test("the count line counts every state pill outside code, asks first, when ther
 		const expected = total >= 5 && tally.size >= 2
 			? [...tally.keys()].sort((a, b) => tone(a) - tone(b)).map((w) => "[[" + w + " " + tally.get(w) + "]]").join(" ")
 			: undefined;
-		expect(countLine(md)).toBe(expected);
+		expect(countLineOf(ext, md)).toBe(drawnCount(ext, expected));
 	}));
-
-const theme = {
-	fg: (c: string, t: string) => "<" + c + ">" + t + "</>",
-	getFgAnsi: (c: string) => "\x1b[38;fg-" + c + "m",
-	getBgAnsi: (c: string) => "\x1b[48;bg-" + c + "m",
-} as never;
-const palette = createPalette(theme);
 const codeText = gs.text({ alphabet: "ab [*]$\\_D1:→✓├─#", minSize: 1, maxSize: 16 });
 
 test("words that name inherited object members are no table entries", () =>
@@ -81,10 +82,10 @@ test("words that name inherited object members are no table entries", () =>
 		const word = tc.draw(gs.sampledFrom(["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf", "isPrototypeOf"]));
 		const shape = tc.draw(gs.sampledFrom(["## W", "**W:** x", "- **W** x", "x [[W]]", "[[W 3]]", "x\n\n- [[W]]\n- [[Done]]\n- [[Done]]\n- [[Failed]]\n- [[W]]\n- [[Failed]]"]));
 		const md = shape.replaceAll("W", word);
-		const out = decorate(md, palette);
+		const out = ext.draw(md);
 		expect(out).not.toContain("function");
 		expect(out).not.toContain("[object");
-		expect(countLine(md) ?? "").not.toContain("function");
+		expect(countLineOf(ext, md) ?? "").not.toContain("function");
 	}));
 
 test("an unknown theme color name never stops the drawing and falls back to the tone's default", () =>
@@ -94,13 +95,13 @@ test("an unknown theme color name never stops the drawing and falls back to the 
 			fg: (c: string, t: string) => { if (!known.has(c)) throw new Error("Unknown theme color: " + c); return "<" + c + ">" + t + "</>"; },
 			getFgAnsi: (c: string) => { if (!known.has(c)) throw new Error("Unknown theme color: " + c); return "\x1b[38;fg-" + c + "m"; },
 			getBgAnsi: (c: string) => "\x1b[48;bg-" + c + "m",
-		} as never;
+		};
 		const name = tc.draw(gs.oneOf(gs.sampledFrom([...known]), gs.text({ alphabet: "abcteal", minSize: 1, maxSize: 8 })));
 		const tone = tc.draw(gs.sampledFrom(["success", "error", "warning", "ask", "danger", "mode", "owner", "neutral"] as const));
-		const settings = readSettings({ labels: name, colors: { [tone]: name } });
+		const settings = { labels: name, colors: { [tone]: name } };
 		const word = { success: "Done", error: "Failed", warning: "Partial", ask: "Needs you", danger: "Destructive", mode: "Implement", owner: "Shared", neutral: "Anything" }[tone];
-		const out = decorate("**Cause:** [[" + word + "]]", createPalette(strict, settings));
-		const expected = decorate("**Cause:** [[" + word + "]]", createPalette(strict, known.has(name) ? settings : DEFAULT_SETTINGS));
+		const out = load(strict, settings).draw("**Cause:** [[" + word + "]]");
+		const expected = load(strict, known.has(name) ? settings : DEFAULT_SETTINGS).draw("**Cause:** [[" + word + "]]");
 		expect(out).toBe(expected);
 	}));
 
@@ -110,7 +111,7 @@ test("pi's line wrapping never ends a line on a pill icon", () =>
 	hegel.test((tc) => {
 		const words = tc.draw(gs.arrays(gs.sampledFrom(["Done", "Needs you", "In progress", "Costs money", "Failed", "Partial"]), { minSize: 1, maxSize: 6 }));
 		const width = tc.draw(gs.integers({ minValue: 12, maxValue: 60 }));
-		const line = decorate("- **Subject** " + words.map((w) => "[[" + w + "]] some words").join(" "), palette);
+		const line = ext.draw("- **Subject** " + words.map((w) => "[[" + w + "]] some words").join(" "));
 		for (const row of wrapTextWithAnsi(line, width)) {
 			const visible = row.replace(/\x1b\[[0-9;a-zA-Z-]*m/g, "").trimEnd();
 			expect(ICON_GLYPH.test(visible.slice(-2))).toBe(false);
@@ -170,10 +171,10 @@ const ansiTheme = {
 	getFgAnsi: (c: string) => "\x1b[38;5;" + (c.length % 200) + "m",
 	getBgAnsi: (c: string) => "\x1b[48;5;" + (c.length % 200) + "m",
 	getColorMode: () => "256color",
-} as never;
-const ansi = createPalette(ansiTheme);
+};
+const ansi = load(ansiTheme);
 const PILL_END = /\x1b\[22;27m/g;
-const drawnCount = (out: string) => (out.match(PILL_END) ?? []).length;
+const pillCount = (out: string) => (out.match(PILL_END) ?? []).length;
 
 interface Block { text: string; prose: string[]; code: string[] }
 const BLOCKS: ((w: string, v: string) => Block)[] = [
@@ -205,13 +206,13 @@ function expectedCount(prose: string[]): string | undefined {
 
 /** Item 1: the count line counts exactly the pills drawn; code stays as written; a second pass adds nothing. */
 function checkCount(md: string, prose: string[], code: string[]) {
-	const once = decorate(md, ansi, true);
-	expect(drawnCount(once)).toBe(prose.length);
+	const once = ansi.draw(md, true);
+	expect(pillCount(once)).toBe(prose.length);
 	for (const c of code) expect(once).toContain(c);
-	expect(countLine(md)).toBe(expectedCount(prose));
-	const out = decorate(md, ansi);
-	expect(countLine(out)).toBeUndefined();
-	expect(drawnCount(decorate(out, ansi))).toBe(drawnCount(out));
+	expect(countLineOf(ansi, md)).toBe(drawnCount(ansi, expectedCount(prose)));
+	const out = ansi.draw(md);
+	expect(countLineOf(ansi, out)).toBeUndefined();
+	expect(pillCount(ansi.draw(out))).toBe(pillCount(out));
 }
 
 const plain = (t: string) => t;
@@ -233,8 +234,8 @@ const render = (md: string) => new Markdown(md, 0, 0, piTheme).render(400).map((
 
 /** Item 2: the count line and its blank line come out whole; pi parses the rest as without them. */
 function checkPlace(md: string) {
-	const out = decorate(md, ansi).split("\n");
-	const without = decorate(md, ansi, true).split("\n");
+	const out = ansi.draw(md).split("\n");
+	const without = ansi.draw(md, true).split("\n");
 	if (out.length === without.length) {
 		expect(out).toEqual(without);
 		return;
@@ -310,14 +311,14 @@ for (const [name, prose, code] of COUNT_CASES) {
 		const md = REVIEW[name];
 		expect(prosePills(md)).toEqual(prose);
 		for (const c of code) expect(untouched(md, c)).toBe(true);
-		expect(countLine(md)).toBe(expectedCount(prose));
+		expect(countLineOf(ext, md)).toBe(drawnCount(ext, expectedCount(prose)));
 	});
 }
 
 for (const name of ["orderedParen", "introLooseList", "tabFence"] as const) {
 	test("review input " + name + ": the count line place never splits a list or enters code", () => {
 		const md = REVIEW[name];
-		expect(countLine(md)).toBeDefined();
+		expect(countLineOf(ext, md)).toBeDefined();
 		const lines = md.split("\n");
 		const place = countPlace(readMarkdown(lines));
 		expectOwnBlock([...lines.slice(0, place), "[[Done 3]] [[Failed 1]]", "", ...lines.slice(place)], place, lines);

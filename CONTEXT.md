@@ -23,7 +23,7 @@ Pi Emphasis changes how an assistant reply is drawn in Pi's terminal. It never c
 
 ## Rules and where each lives
 
-All rules live in `index.ts` and `reader.ts` and are tested in `test/` without Pi running: `emphasis.test.ts` (words, pills, labels), `look.test.ts` (colors, edges, icons, count line, settings), `reply-style.test.ts` (the prompt section and its words) and `properties.test.ts` (Hegel property tests).
+All rules live in `index.ts` and `reader.ts` and are tested in `test/` without Pi running: `emphasis.test.ts` (words, pills, labels), `look.test.ts` (colors, edges, icons, count line, settings), `reply-style.test.ts` (the prompt section and its words) and `properties.test.ts` (Hegel property tests). Tests cross two seams: the default export, loaded into a stand-in pi (`test/seam.ts`), and the block reader (`readMarkdown`, `countPlace`). `index.ts` exports only the default export and three test-only tables: `VOCABULARY`, `readSettings` and `DEFAULT_SETTINGS`.
 
 - Which tone a word has, and which words exist: `VOCABULARY` (`core` are the defining words, `also` are accepted too), read by `toneOf`.
 - Which icon a pill word has: `WORD_ICON` gives its group, `ICON_SETS` gives the group's glyph.
@@ -32,7 +32,7 @@ All rules live in `index.ts` and `reader.ts` and are tested in `test/` without P
 - Which lead-in words take an icon after a pill: `ACTION_ICONS`.
 - What the settings may hold and their defaults: `readSettings` and `DEFAULT_SETTINGS`; the README section "Settings" describes them for people.
 - How a tone becomes escapes: `createPalette` (`PANEL_MIX`, the contrast pick for solid pills, the 256-color fallback).
-- When and where the count line appears: `tally`, `countPlace` (in `reader.ts`) and `COUNT_LINE_MIN`; `countLine` gives it for a reply.
+- When and where the count line appears: `tally`, `countPlace` (in `reader.ts`) and `COUNT_LINE_MIN`.
 - What the agent is told: `REPLY_STYLE`, fixed text; `test/reply-style.test.ts` checks that each word it names is in the tables above.
 - How a pill label splits into icon, word and detail: `splitLabel`.
 - What is prose and what stays untouched (code in any container, inline code, HTML comments, top-level math, escaped markers): the block reader, `readMarkdown` in `reader.ts`, shared by the drawing (`drawProse`, `drawHeading`) and the count line.
