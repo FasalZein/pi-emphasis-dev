@@ -40,6 +40,72 @@ const SPECIAL_CODES = new Uint8Array(128);
 for (const c of [0x5c, 0x60, 0x24, 0x3c, 0x5b, 0x5d, 0x28, 0x29, 0x2a, 0x5f, 0x7e, 0x3e]) SPECIAL_CODES[c] = 1;
 const WORD_CHAR = /[\p{L}\p{N}]/u;
 const SPACE = /\s/;
+// A link reference definition (marked's def rule): pi shows nothing of it. Its title may sit on the next line.
+const LINK_TITLE = String.raw`(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\))`;
+const DEFINITION = new RegExp(String.raw`^\[(?!\s*\])(?:\\.|[^\[\]\\])+\]: *(?:<[^<>\n]*>|[^<\s]\S*)(?: +${LINK_TITLE})? *$`);
+const DEFINITION_TITLE = new RegExp(String.raw`^ *${LINK_TITLE} *$`);
+const DEFINITION_UNTITLED = /^\[(?!\s*\])(?:\\.|[^\[\]\\])+\]: *(?:<[^<>\n]*>|[^<\s]\S*) *$/;
+// An autolink (marked's autolink rule): its target is the link, never prose.
+const AUTOLINK = /^<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s\x00-\x1f<>]*|[A-Za-z0-9.!#$%&'*+/=?^_\x60{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+)>/;
+
+// A bare URL (marked's GFM url rule and its trailing-punctuation backpedal): pi links it as a whole.
+const URL_START = /(?:[hH][tT][tT][pP][sS]?|[fF][tT][pP]):\/\/|www\./g;
+const URL = /^(?:(?:[hH][tT][tT][pP][sS]?|[fF][tT][pP]):\/\/|www\.)(?:[a-zA-Z0-9-]+\.?)+[^\s<]*/;
+const URL_BACKPEDAL = /(?:[^?!.,:;*_'"~()&]+|\([^)]*\)|&(?![a-zA-Z0-9]+;$)|[?!.,:;*_'"~)]+(?!$))+/;
+/** The start of the next bare URL candidate at or after from, or -1. */
+function urlStart(text: string, from: number): number {
+	URL_START.lastIndex = from;
+	return URL_START.exec(text)?.index ?? -1;
+}
+/** The end of the bare URL at index at, or -1. */
+function urlEnd(text: string, at: number): number {
+	let url = text.slice(at).match(URL)?.[0];
+	if (url === undefined) return -1;
+	for (let previous = ""; previous !== url; ) {
+		previous = url;
+		url = URL_BACKPEDAL.exec(url)?.[0] ?? "";
+	}
+	return url ? at + url.length : -1;
+}
+
+/**
+ * The end of the inline link destination and title that open with the "(" at index at, after the
+ * closing "]" of link text, or -1 when none closes on this line (marked's inline link rule).
+ */
+function linkTargetEnd(text: string, at: number): number {
+	let q = at + 1;
+	while (text[q] === " " || text[q] === "\t") q++;
+	if (text[q] === "<") {
+		while (++q < text.length && text[q] !== ">" && text[q] !== "<") if (text[q] === "\\") q++;
+		if (text[q] !== ">") return -1;
+		q++;
+	} else {
+		let depth = 0;
+		for (; q < text.length; q++) {
+			const c = text[q];
+			if (c === "\\") q++;
+			else if (c === " " || c === "\t" || c < " ") break;
+			else if (c === "(") depth++;
+			else if (c === ")") {
+				if (depth === 0) break;
+				depth--;
+			}
+		}
+		if (depth !== 0) return -1;
+	}
+	const afterDestination = q;
+	while (text[q] === " " || text[q] === "\t") q++;
+	const open = text[q];
+	if ((open === '"' || open === "'" || open === "(") && q > afterDestination) {
+		const close = open === "(" ? ")" : open;
+		for (q++; q < text.length && text[q] !== close; q++) if (text[q] === "\\") q++;
+		if (q >= text.length) return -1;
+		q++;
+		while (text[q] === " " || text[q] === "\t") q++;
+	}
+	return text[q] === ")" ? q + 1 : -1;
+}
+
 // A line that may end a paragraph and open another block: a code span reaching past it is uncertain.
 const INTERRUPT = /^(?:\x60{3,}|~{3,}|#{1,6}(?: |$)|>|<|(?:[-*+]|\d{1,9}[.)])(?: |$))/;
 
@@ -110,6 +176,8 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 	let fence: { char: string; length: number; base: number; depth: number; line: number } | undefined;
 	let indentedBase: number | undefined;
 	let paragraph = false;
+	// The first line of the open paragraph: a setext underline makes its lines a heading.
+	let paragraphStart = 0;
 	let emptyItem = false;
 	let previousDepth = 0;
 	// Display math opens no block after an unclosed math mark (pi then shows the rest as written) or inside a
@@ -136,6 +204,11 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 	const listColumns: number[] = [];
 	const code: ReadLine = { kind: "code", literal: [], plain: false };
 
+	// pi shows the text as written (pending math): it holds no link.
+	const asWritten = () => mathOff || pendingMath || containerMath;
+	// Set at a math mark in a quote or a list item, where the reader does not follow pi's math: pi may show the
+	// rest as written. Link metadata is then drawn as before. Cleared at the next top-level block after a blank line.
+	let containerMath = false;
 	// The literal ranges of line i from "from" on.
 	const inline = (i: number, from: number, multiline: boolean): Range[] => {
 		const text = lines[i];
@@ -156,6 +229,8 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 		const hasUrl = text.includes("://") || text.includes("www.");
 		let scanned = from;
 		let wordStart = from;
+		// The next bare URL start; outside link text, its URL is literal.
+		let nextUrl = hasUrl ? urlStart(text, from) : -1;
 		const inUrl = (p: number) => {
 			if (!hasUrl) return false;
 			for (; scanned < p; scanned++) if (SPACE.test(text[scanned])) wordStart = scanned + 1;
@@ -164,13 +239,28 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 		};
 		for (let p = from; p < text.length; ) {
 			// Jump to the next character that may open a code span, a comment, math, an escape or a construct.
-			while (p < text.length && SPECIAL_CODES[text.charCodeAt(p)] !== 1) p++;
+			if (nextUrl >= 0 && nextUrl < p) nextUrl = urlStart(text, p);
+			while (p < text.length && SPECIAL_CODES[text.charCodeAt(p)] !== 1 && p !== nextUrl) p++;
 			if (p >= text.length) break;
+			if (p === nextUrl) {
+				const end = brackets === 0 && !asWritten() ? urlEnd(text, p) : -1;
+				if (end > p) literal.push([p, end]);
+				p = end > p ? end : p + 1;
+				nextUrl = urlStart(text, p);
+				continue;
+			}
 			const c = text[p];
 			if (c === "[" || c === "]" || c === "(" || c === ")" || c === ">") {
 				if (c === "[") brackets++;
 				else if (c === "]") {
+					// Link metadata is not shown as text: the destination and title stay literal.
+					const linkEnd = brackets > 0 && text[p + 1] === "(" && !asWritten() ? linkTargetEnd(text, p + 1) : -1;
 					if (brackets > 0) brackets--;
+					if (linkEnd > 0) {
+						literal.push([p + 1, linkEnd]);
+						p = linkEnd;
+						continue;
+					}
 					if (text[p + 1] === "(") {
 						target = 1;
 						p++;
@@ -199,6 +289,7 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 				continue;
 			}
 			if (c === "\\" || c === "$") {
+				if (inContainer && (c === "$" || text[p + 1] === "(" || text[p + 1] === "[")) containerMath = true;
 				// pi shows inline math (pi-tui's latex extension) as math: its pills stay literal.
 				let math = mathOff || pendingMath || htmlParagraph || inContainer || unsure ? -1 : inlineMathEnd(text, p);
 				if (math !== -1 && (brackets > 0 || target > 0 || stars % 2 || unders % 2 || tildes % 2 || tag || inUrl(p))) {
@@ -230,6 +321,12 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 				continue;
 			}
 			const comment = text[p] === "<";
+			const autolink = comment && text[p + 1] !== "!" && !asWritten() ? text.slice(p).match(AUTOLINK) : null;
+			if (autolink) {
+				literal.push([p, p + autolink[0].length]);
+				p += autolink[0].length;
+				continue;
+			}
 			if (comment && !text.startsWith("<!--", p)) {
 				// An HTML tag or an autolink may hold a "$" up to its ">".
 				if (/[A-Za-z/!?]/.test(text[p + 1] ?? "")) tag = true;
@@ -361,11 +458,13 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 			htmlParagraph = false;
 			push({ kind: "blank", literal: [], plain: false }, i);
 			const clean = !fence && indentedBase === undefined && !paragraph && !emptyItem && previousDepth === 0 && listColumns.length === 0;
-			if (clean && seen <= i && !mathOff && !pendingMath && !inlineCarry && !htmlParagraph && literalUntil === undefined && !discovering) boundary = i;
+			if (clean && seen <= i && !containerMath && !mathOff && !pendingMath && !inlineCarry && !htmlParagraph && literalUntil === undefined && !discovering) boundary = i;
 			continue;
 		}
 		// After a blank line, a line indented less than a list item's content ends that item.
 		// Any other line indented less than an item's content, except a lazy paragraph line, ends it too.
+		if (containerMath && depth === 0 && read[i - 1]?.kind === "blank" && (listColumns.length === 0 || indent < listColumns[0])) containerMath = false;
+		const columns = listColumns.length;
 		if (!paragraph || opensBlock || /^(?:=+|-+) *$/.test(body)) while (listColumns.length && listColumns[listColumns.length - 1] > indent) listColumns.pop();
 		const base = listColumns.at(-1) ?? 0;
 		if (!paragraph && indent >= base + 4) {
@@ -376,6 +475,9 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 		// A setext underline ends its paragraph.
 		if (paragraph && /^(?:=+|-+) *$/.test(body)) {
 			paragraph = false;
+			// pi shows the paragraph as a heading when the underline is in its container (a line that ends a list
+			// item is no lazy underline). Its place for the count line stays above it, as before.
+			if (listColumns.length === columns) for (let k = paragraphStart; k < i; k++) if (read[k].kind === "prose") read[k] = { kind: "heading", literal: read[k].literal, plain: false };
 			push({ kind: "prose", literal: literalOf(i, false), plain: false }, i);
 			continue;
 		}
@@ -446,6 +548,7 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 		// In a quote or a list item, pi lexes the container's content on its own: pending math there ends with
 		// the container and leaves top-level math after it alone.
 		if (mathMark && mathEnd < 0 && depth + innerDepth === 0 && !marker && listColumns.length === 0) mathOff = true;
+		else if (mathMark && mathEnd < 0) containerMath = true;
 		if (mathEnd >= 0) {
 			paragraph = false;
 			for (; i <= mathEnd; i++) push(code, i);
@@ -476,6 +579,16 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 			i--;
 			continue;
 		}
+		// A link reference definition, outside a paragraph: pi shows none of it.
+		if (!paragraph && !lazy && !mathOff && !containerMath && content[0] === "[" && DEFINITION.test(content)) {
+			push(code, i);
+			if (i + 1 < lines.length && DEFINITION_UNTITLED.test(content)) {
+				see(i + 1);
+				const next = blockOf(lines[i + 1]);
+				if (next.depth === depth && DEFINITION_TITLE.test(next.body)) push(code, ++i);
+			}
+			continue;
+		}
 		const plain = depth + innerDepth === 0 && !marker && listColumns.length === 0 && indent <= 3;
 		if (!paragraph) topParagraph = plain;
 		// marked looks for the next block from the paragraph's second character: "x $$" there opens pending
@@ -497,6 +610,7 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 			pendingMath = false;
 			inlineCarry = false;
 		}
+		if (!paragraph || marker) paragraphStart = i;
 		paragraph = !emptyItem;
 		const paragraphPlain = plain && !/^[<|]/.test(body);
 		push({ kind: "prose", literal: literalOf(i, true), plain: paragraphPlain }, i);

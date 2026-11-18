@@ -323,13 +323,18 @@ function createPalette(theme: Theme, settings: EmphasisSettings = DEFAULT_SETTIN
 	};
 }
 
-// Escaped bold markers, bold markers, or a [[pill]] of 1-32 characters. A backslash run is read from
-// its start only, so a long run without a marker costs time linear in its length.
-const INLINE = /(?<!\\)(\\*)(\*\*|__)|\[\[([^\[\]\n]{1,32})\]\]/g;
+// A [[pill]] of 1-32 characters. Neither bracket pair may be escaped (an odd backslash run before it):
+// pi shows an escaped bracket as written.
+const UNESCAPED = String.raw`(?<=(?:^|[^\\])(?:\\\\)*)`;
+const PILL = String.raw`${UNESCAPED}\[\[([^\[\]\n]{1,32})${UNESCAPED}\]\]`;
+const PILL_SKIP = String.raw`${UNESCAPED}\[\[[^\[\]\n]{1,32}${UNESCAPED}\]\]`;
+// Escaped bold markers, bold markers, or a pill. A backslash run is read from its start only, so a long
+// run without a marker costs time linear in its length.
+const INLINE = new RegExp(String.raw`(?<!\\)(\\*)(\*\*|__)|` + PILL, "g");
 // INLINE, then the glyphs that take a color: checks, crosses, arrows and tree connectors.
 const INLINE_OR_GLYPH = new RegExp(INLINE.source + "|([✓✔])|([✗✘])|(→)|([├└]──)", "g");
 // A written scoreboard: a line of two or more pills and nothing else.
-const PILLS_ONLY = /^\s*\[\[[^\[\]\n]{1,32}\]\](?:\s*\[\[[^\[\]\n]{1,32}\]\])+\s*$/;
+const PILLS_ONLY = new RegExp(String.raw`^\s*${PILL_SKIP}(?:\s*${PILL_SKIP})+\s*$`);
 /** The fewest state pills (ask, error, warning or success) a reply needs for a count line. */
 const COUNT_LINE_MIN = 5;
 const COUNT_ORDER: PillTone[] = ["ask", "error", "warning", "success"];
@@ -431,23 +436,31 @@ function decorate(markdown: string, palette: Palette, streaming = false, cache?:
 	if (head && (head.palette !== palette || markdown.length < head.length || !markdown.startsWith(head.source.slice(0, head.length)))) head = undefined;
 	if (head) head.source = markdown;
 	const restText = head ? markdown.slice(head.length) : markdown;
-	const lines = restText.split("\n");
+	// pi's parser reads CRLF and CR as line breaks too; the drawing keeps each break as written.
+	const { lines, breaks } = splitLines(restText);
 	const drawing = draw(lines, palette);
-	const drawn = drawing.lines.join("\n");
+	const drawn = joinLines(drawing.lines, breaks);
 	const scoreboard = (head?.scoreboard ?? false) || drawing.scoreboard;
 	// The count line waits for the whole reply: drawn while streaming, it would move the text below it.
 	const line = streaming || scoreboard ? undefined : tally(head ? [...head.pills, ...drawing.pills] : drawing.pills);
 	let out: string;
 	if (line) {
 		// A drawn line holds no line break, so the head's drawing splits back into its lines.
-		const all = head ? [...head.out.slice(0, -1).split("\n"), ...drawing.lines] : [...drawing.lines];
+		const headLines = head ? splitLines(head.out) : { lines: [""], breaks: [] };
+		const all = [...headLines.lines.slice(0, -1), ...drawing.lines];
+		const lf = (n: number) => Array<string>(n).fill("\n");
+		const allBreaks = breaks || headLines.breaks ? [...(headLines.breaks ?? lf(headLines.lines.length - 1)), ...(breaks ?? lf(lines.length - 1))] : undefined;
 		const [open, close] = boldEnds(palette);
-		all.splice(countPlace(head ? [...head.read, ...drawing.read] : drawing.read), 0, drawProse(line, [], palette, open, close), "");
-		out = all.join("\n");
+		const place = countPlace(head ? [...head.read, ...drawing.read] : drawing.read);
+		all.splice(place, 0, drawProse(line, [], palette, open, close), "");
+		allBreaks?.splice(place, 0, "\n", "\n");
+		out = joinLines(all, allBreaks);
 	} else out = (head?.out ?? "") + drawn;
 	// Streaming only: move the newly finished blocks into the head. A finished reply (the last call, a history
 	// load, a width change) is drawn once per change and builds none. The boundary line must end with a line
 	// break here, so that the head text is a prefix of this reply.
+	// A CR that ends the text may be the first half of a CRLF, but the head never ends with it: after it comes
+	// an empty last line, a blank line that is itself the boundary, so drawing.boundary is never the line before.
 	if (cache && streaming && drawing.boundary >= 0 && drawing.boundary < lines.length - 1) {
 		const n = drawing.boundary + 1;
 		const next: Head = head ?? { palette, source: markdown, length: 0, out: "", read: [], pills: [], scoreboard: false };
@@ -455,8 +468,9 @@ function decorate(markdown: string, palette: Palette, streaming = false, cache?:
 		let textLength = 0;
 		let outLength = 0;
 		for (let i = 0; i < n; i++) {
-			textLength += lines[i].length + 1;
-			outLength += drawing.lines[i].length + 1;
+			const breakLength = breaks ? breaks[i].length : 1;
+			textLength += lines[i].length + breakLength;
+			outLength += drawing.lines[i].length + breakLength;
 		}
 		next.length += textLength;
 		// Each character is detached once per reply: when its block finishes.
@@ -467,6 +481,20 @@ function decorate(markdown: string, palette: Palette, streaming = false, cache?:
 		head = next;
 	}
 	if (cache) cache.head = head;
+	return out;
+}
+
+const LINE_BREAK = /\r\n|\r|\n/g;
+/** Lines split at LF, CRLF and CR; breaks is undefined when every break is LF. */
+function splitLines(text: string): { lines: string[]; breaks?: string[] } {
+	if (!text.includes("\r")) return { lines: text.split("\n") };
+	return { lines: text.split(LINE_BREAK), breaks: text.match(LINE_BREAK) ?? [] };
+}
+/** The inverse of splitLines. */
+function joinLines(lines: string[], breaks?: string[]): string {
+	if (!breaks) return lines.join("\n");
+	let out = lines[0];
+	for (let i = 1; i < lines.length; i++) out += breaks[i - 1] + lines[i];
 	return out;
 }
 
@@ -553,7 +581,7 @@ const PILL_GAP = /\]\] \[\[/g;
 // pi's Markdown reads "$" as the start of LaTeX math, and a later "*" makes it print the rest of the
 // line raw. Before a digit, "$" is a currency sign: escape it, unless it opens math that pi draws.
 const CURRENCY = /(^|[^\\$])\$(?=\d)/g;
-const DOLLAR_OR_PILL = /\[\[[^\[\]\n]{1,32}\]\]|(?<![\\$])\$(?=\d)/g;
+const DOLLAR_OR_PILL = new RegExp(PILL_SKIP + String.raw`|(?<![\\$])\$(?=\d)`, "g");
 
 /** Whether the "$" at index "at" opens inline math for pi (tokenizeInlineLatex in pi-tui's markdown.js). */
 function opensMath(text: string, at: number): boolean {
@@ -571,11 +599,11 @@ const DOLLAR_DIGIT = /\$\d/;
 const escapeProse = (text: string) =>
 	!DOLLAR_DIGIT.test(text) ? text : text.replace(DOLLAR_OR_PILL, (m: string, at: number) => (m !== "$" || opensMath(text, at) ? m : "\\$"));
 
-const ACTION_OR_PILL = new RegExp(String.raw`\[\[[^\[\]\n]{1,32}\]\]|(\*\*)(${Object.keys(ACTION_ICONS).join("|")})(:\*\*)`, "gi");
-// An action lead-in ends in ":**"; a pill match is kept as written.
+const ACTION_OR_PILL = new RegExp(PILL_SKIP + String.raw`|(?<!\\)(\\*)(\*\*)(${Object.keys(ACTION_ICONS).join("|")})(:\*\*)`, "gi");
+// An action lead-in ends in ":**" and opens with an unescaped "**"; a pill match is kept as written.
 const withActionIcons = (text: string) =>
-	!text.includes(":**") ? text : text.replace(ACTION_OR_PILL, (m: string, before?: string, word?: string, after?: string) =>
-		word === undefined ? m : before + ACTION_ICONS[word.toLowerCase()] + " " + word + after,
+	!text.includes(":**") ? text : text.replace(ACTION_OR_PILL, (m: string, slashes?: string, before?: string, word?: string, after?: string) =>
+		word === undefined || slashes!.length % 2 === 1 ? m : slashes! + before + ACTION_ICONS[word.toLowerCase()] + " " + word + after,
 	);
 
 // A prose line without any of these marks draws as written: every step below leaves it unchanged.
@@ -588,6 +616,9 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
 	if (!parts[0].literal && parts[0].text.includes("**")) parts[0].text = parts[0].text.replace(LEAD_LABEL, (_, before: string, label: string, after: string) => before + withLabelIcon(label) + after);
 	let result = "";
 	let inBold: string | undefined;
+	// After an escaped opening marker, pi's parser pairs the next same marker with the star or underscore
+	// left over: that marker opens no bold either.
+	let escaped: string | undefined;
 	const reopen = () => (inBold ? `\x1b[1m${open}` : "");
 	// A glyph takes its color and, inside bold, the bold color again after it.
 	const glyph = (m: string, color: Colorize | undefined) => (color ? color(m) + (inBold ? open : "") : m);
@@ -611,7 +642,14 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
 				drawn?.push(label);
 				return pill(label, palette) + reopen();
 			}
-			if ((slashes ?? "").length % 2 === 1) return match; // escaped marker
+			if ((slashes ?? "").length % 2 === 1) {
+				if (!inBold) escaped = marker;
+				return match;
+			}
+			if (!inBold && escaped === marker) {
+				escaped = undefined;
+				return match;
+			}
 			if (!inBold) {
 				inBold = marker;
 				return slashes! + marker + open;

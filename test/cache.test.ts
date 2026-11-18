@@ -24,6 +24,11 @@ const REPLIES: Record<string, string> = {
 	"a reply that ends with a blank line": "Intro [[Done]]\n\n## Status\n\n[[Done]] [[Failed]] [[Needs you]] [[Passed]] [[Blocked]]\n\n",
 	"a count line over cached blocks": "Intro **Result:** x\n\n- [[Done]] a\n- [[Failed]] b\n\nText [[Passed]] [[Blocked]] [[Needs you]]\n\nEnd ✓ → [[Done]]",
 };
+// CRLF and CR breaks: a streamed prefix may end with the CR of a CRLF whose LF has not arrived yet.
+for (const [name, reply] of Object.entries({ ...REPLIES })) {
+	REPLIES[name + " (CRLF)"] = reply.replace(/\n/g, "\r\n");
+	REPLIES[name + " (CR)"] = reply.replace(/\n/g, "\r");
+}
 
 for (const [name, reply] of Object.entries(REPLIES)) {
 	test("streamed through one instance, every prefix draws as without a cache: " + name, () => {

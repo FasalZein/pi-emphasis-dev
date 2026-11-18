@@ -35,7 +35,7 @@ All rules live in `index.ts` and `reader.ts` and are tested in `test/` without P
 - When and where the count line appears: `tally`, `countPlace` (in `reader.ts`) and `COUNT_LINE_MIN`.
 - What the agent is told: `REPLY_STYLE`, fixed text; `test/reply-style.test.ts` checks that each word it names is in the tables above.
 - How a pill label splits into icon, word and detail: `splitLabel`.
-- What is prose and what stays untouched (code in any container, inline code, HTML comments, top-level math, escaped markers): the block reader, `readMarkdown` in `reader.ts`, shared by the drawing (`drawProse`, `drawHeading`) and the count line.
+- What is prose and what stays untouched (code in any container, inline code, HTML comments, top-level math, escaped markers, link metadata): the block reader, `readMarkdown` in `reader.ts`, shared by the drawing (`drawProse`, `drawHeading`) and the count line.
 
 ## Border
 

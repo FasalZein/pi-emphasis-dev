@@ -1,7 +1,13 @@
 // pi's own reading of a reply as the oracle for the block reader: the reply goes through pi-tui's Markdown
 // (pi's configured parser: its tokenizer, CJK emphasis, LaTeX extensions, comment removal) with a theme
 // that wraps code spans and code block lines in sentinels, and with math wrapped the same way.
-import { Markdown } from "@earendil-works/pi-tui";
+import { Markdown, setCapabilityOverrides } from "@earendil-works/pi-tui";
+
+// pi in a terminal with hyperlinks: a link shows its text only and carries its target in OSC 8.
+setCapabilityOverrides({ hyperlinks: true });
+// Terminal control sequences: OSC (such as an OSC 8 link target) and CSI.
+const CONTROL = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[ -\/]*[@-~]/g;
+const LINK_TARGET = /\x1b\]8;[^;\x07\x1b]*;([^\x07\x1b]+)(?:\x07|\x1b\\)/g;
 
 const OPEN = "\u0001";
 const CLOSE = "\u0002";
@@ -32,7 +38,8 @@ export function piRender(md: string): string {
 
 /** For each id, true when pi shows it outside code and math (as prose), false when only in code or math or hidden. */
 export function piShown(md: string, ids: string[]): boolean[] {
-	const out = piRender(md);
+	// Only what the terminal prints is prose: a link target in OSC 8 is not.
+	const out = piRender(md).replace(CONTROL, "");
 	const outside: string[] = [];
 	let depth = 0;
 	let start = 0;
@@ -47,4 +54,9 @@ export function piShown(md: string, ids: string[]): boolean[] {
 	}
 	const prose = outside.join("\n");
 	return ids.map((id) => prose.includes(id));
+}
+
+/** The link targets (OSC 8) of pi's rendering of md, in order. */
+export function piLinks(md: string): string[] {
+	return [...piRender(md).matchAll(LINK_TARGET)].map((m) => m[1]);
 }
