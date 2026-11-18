@@ -137,7 +137,7 @@ Your own messages, inline code, fenced code and escaped asterisks are left alone
 
 ## Settings
 
-The extension reads an optional `emphasis` block from pi's settings. Pi merges the global file `~/.pi/agent/settings.json` with the project file `.pi/settings.json`, and the extension reads the merged result. A field that is missing or not valid takes its default. A color name that the current pi theme does not know, such as `"teal"`, also takes its default: use `#rrggbb` for a color outside the theme. After you change the block, run `/reload` in pi.
+The extension reads an optional `emphasis` block from pi's settings. Pi merges the global file `~/.pi/agent/settings.json` with the project file `.pi/settings.json`, and the extension reads the merged result. A field that is missing or not valid takes its default. A color name that the current pi theme does not know as a foreground color, such as `"teal"` or the background color `"toolPendingBg"`, also takes its default: use `#rrggbb` for a color outside the theme. After you change the block, run `/reload` in pi.
 
 ### Example
 
@@ -209,7 +209,7 @@ An en space (U+2002) follows each icon. Ghostty lets a Nerd Font icon draw over 
 
 #### labels
 
-The color of bold text: lead labels such as **Result:**, lead-ins such as **Do:**, and other bold words. The value is a pi theme color name or `#rrggbb`. The default is `mdLink`, the theme's link color, which is blue in the tokyonight theme.
+The color of bold text: lead labels such as **Result:**, lead-ins such as **Do:**, and other bold words. The value is a foreground color name of the pi theme or `#rrggbb`. The default is `mdLink`, the theme's link color, which is blue in the tokyonight theme.
 
 Other theme colors that work well for labels:
 
@@ -224,7 +224,7 @@ Other theme colors that work well for labels:
 
 #### colors
 
-The color of each tone. A tone is the color group of a pill word. Each value is a pi theme color name or `#rrggbb`. A theme color name follows a theme change in the Theme selector of `/settings`; a hex color stays the same in every theme.
+The color of each tone. A tone is the color group of a pill word. Each value is a foreground color name of the pi theme or `#rrggbb`. A theme color name follows a theme change in the Theme selector of `/settings`; a hex color stays the same in every theme.
 
 | Tone | Words | Default color |
 |---|---|---|
