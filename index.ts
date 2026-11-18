@@ -1,12 +1,21 @@
 // pi-emphasis: display-only emphasis for assistant replies in Pi's terminal.
 //
-//   **anchor term**   bold keeps its weight and takes a theme color (link blue by default)
+//   **anchor term**   bold keeps its weight and takes a theme color (link blue)
 //   ✓ / ✗             take the success and error colors
 //   [[Blocked]]       becomes a rounded status pill colored by its word, with that word's icon
 //
 // Stored messages, copied text, and HTML exports keep the original Markdown.
 // In the terminal interface it also adds a reply_style section to the system prompt, telling the
-// model how to write these (PI_EMPHASIS_GUIDANCE=0 turns that off).
+// model how to write these.
+//
+// Fork of https://github.com/johnlindquist/pi-emphasis at commit f884b73 (see README.md, "This fork").
+// Keep the drawing code close to upstream so a sync stays a readable merge.
+// Changes against upstream:
+//   - The prompt section is the compact tested text REPLY_STYLE (289 tokens against 2,419 for
+//     upstream's replyGuidance()). replyGuidance(), its helpers, CONTEXT_WORDS and the colorBold
+//     alias are removed.
+//   - The PI_EMPHASIS_GUIDANCE, PI_EMPHASIS_ROUND_CAPS, PI_EMPHASIS_PILL_ICONS and PI_EMPHASIS_COLOR
+//     switches are removed; their defaults are fixed: rules on, round caps, icons on, bold in mdLink.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 type Colorize = (text: string) => string;
@@ -33,7 +42,7 @@ export interface ThemeLike {
 	getBgAnsi(color: never): string;
 }
 
-/** Each tone's words. `core` are the words agents are told to write; `also` are accepted and colored the same. */
+/** Each tone's words. `core` are the words upstream's guidance listed; `also` are accepted and colored the same. */
 export const VOCABULARY: Record<Exclude<PillTone, "neutral">, { core: string[]; also: string[] }> = {
 	error: { core: ["Failed", "Blocked", "Broken", "Unsafe"], also: ["fail", "failing", "error", "rejected", "down"] },
 	warning: { core: ["Needs you", "Decision", "Unverified", "Partial", "Skipped", "In progress", "Pending", "At risk"], also: ["needs review", "waiting", "review", "todo", "stale", "draft"] },
@@ -42,9 +51,6 @@ export const VOCABULARY: Record<Exclude<PillTone, "neutral">, { core: string[]; 
 	mode: { core: ["Brainstorm", "Investigate", "Preview", "Implement", "Qualify"], also: [] },
 	owner: { core: ["Owned", "Shared", "Foreign"], also: [] },
 };
-/** Words that are soft blue like any unknown label, but have an icon and a place in the guidance. */
-export const CONTEXT_WORDS = ["Inferred", "New", "Changed", "Optional"];
-
 const TONE_WORDS = Object.fromEntries(
 	Object.entries(VOCABULARY).map(([tone, words]) => [tone, [...words.core, ...words.also].map((w) => w.toLowerCase())]),
 ) as Record<Exclude<PillTone, "neutral">, string[]>;
@@ -143,7 +149,7 @@ export function createPalette(theme: ThemeLike, boldColor = "mdLink"): Palette {
 		},
 		arrow: fg("accent"),
 		tree: fg("dim"),
-		roundCaps: process.env.PI_EMPHASIS_ROUND_CAPS !== "0",
+		roundCaps: true,
 	};
 }
 
@@ -181,7 +187,7 @@ const ACTION_LABEL = new RegExp(`(\\*\\*)(${Object.keys(ACTION_ICONS).join("|")}
 
 /** Prefix a known label with its icon, unless it already opens with a glyph. */
 function withLabelIcon(label: string): string {
-	if (OWN_ICON.test(label) || process.env.PI_EMPHASIS_PILL_ICONS === "0") return label;
+	if (OWN_ICON.test(label)) return label;
 	const word = label.replace(/[:\s]+$/, "").trim().toLowerCase();
 	const icon = LABEL_ICONS[word] ?? (label.trimEnd().endsWith(":") ? ACTION_ICONS[word] : undefined);
 	return icon ? `${icon} ${label}` : label;
@@ -194,7 +200,7 @@ function pill(label: string, palette: Palette): string {
 	const style = palette.pills![toneOf(label)];
 	// No-break spaces keep a two-word pill on one line when Pi wraps the paragraph.
 	const { icon, word } = splitLabel(label);
-	const text = (icon && word && process.env.PI_EMPHASIS_PILL_ICONS !== "0" ? `${icon} ${word}` : word || label.trim()).replace(/ /g, "\u00a0");
+	const text = (icon && word ? `${icon} ${word}` : word || label.trim()).replace(/ /g, "\u00a0");
 	const [left, right] = palette.roundCaps ? ["\ue0b6", "\ue0b4"] : ["", ""];
 	const pad = palette.roundCaps ? "" : "\u00a0";
 	const capL = left ? `${style.cap}${left}\x1b[39m` : "";
@@ -216,7 +222,7 @@ function decorateLine(line: string, palette: Palette, open: string, close: strin
 			continue;
 		}
 		let prose = part;
-		if (process.env.PI_EMPHASIS_PILL_ICONS !== "0") prose = prose.replace(ACTION_LABEL, (_, before: string, word: string, after: string) => `${before}${ACTION_ICONS[word.toLowerCase()]} ${word}${after}`);
+		prose = prose.replace(ACTION_LABEL, (_, before: string, word: string, after: string) => `${before}${ACTION_ICONS[word.toLowerCase()]} ${word}${after}`);
 		if (palette.passed) prose = prose.replace(/[✓✔]/g, (m) => palette.passed!(m) + (inBold ? open : ""));
 		if (palette.failed) prose = prose.replace(/[✗✘]/g, (m) => palette.failed!(m) + (inBold ? open : ""));
 		if (palette.arrow) prose = prose.replace(/→/g, (m) => palette.arrow!(m) + (inBold ? open : ""));
@@ -243,47 +249,16 @@ function decorateLine(line: string, palette: Palette, open: string, close: strin
 	return result;
 }
 
-const pills = (words: string[]) => words.map((w) => `[[${w}]]`).join(", ");
-const titled = (words: string[]) => words.map((w) => w[0].toUpperCase() + w.slice(1)).join(", ");
-
-/** The reply-style rules given to the model, with every word list read from the tables that draw them. */
-export function replyGuidance(): string {
-	const v = VOCABULARY;
-	return `These rules shape replies written to the user in this terminal. It colors pills, adds icons, and cannot change text size.
-
-- **Label every reply.** Start the first substantive line with a bold label, even for a one-line update, and give each subject in a multi-part reply a short heading or a bullet with a bold lead label. Write the label as a plain word; the terminal adds its icon. Never type icon glyphs. Labels with an icon: ${titled(Object.keys(LABEL_ICONS))}. Prefer these; any other label shows without an icon.
-- **Shape follows information.** Use \`├──\` and \`└──\` for what belongs to what, \`→\` for a sequence, \`✓\` or \`✗\` beside a checked item. Write tree rows as indented lines directly under their parent with no list dash, one line per row. A one-line answer can stay one line.
-- **Bold the anchor terms.** Treat the projects, components, choices, options, and statuses under discussion as the nodes of a graph, and bold them where they carry the point: a first mention in a section, a bullet's lead label such as **Cause:**, and the recommendation or decision the user must make. One to three bold spans per paragraph or bullet; bolding every noun erases the signal. Italicize sparingly, for contrast and meaning-changing words such as *not*, *only*, or *unverified*.
-- **Pills are required, not optional.** A pill is \`[[Word]]\` beside the subject it describes; the terminal colors it and adds its icon from the word. A pill names a state or an ask, never an adjective. Use exactly these words so the same state always reads the same:
-  - **Red, something is wrong:** ${pills(v.error.core)}. Every failure and blocker carries one.
-  - **Yellow, look here:** ${pills(v.warning.core)}. [[Needs you]] is an action only the user can take; [[Decision]] is a call only the user makes. Every ask and every unchecked claim carries one.
-  - **Green, settled:** ${pills(v.success.core)}.
-  - **Solid red, consequences:** ${pills(v.danger.core)}. Required beside any action that has one, before taking it.
-  - **Cyan, kind of work:** open every substantive reply with the kind of work you understood the request to be: ${pills(v.mode.core)}. Brainstorm is options and a recommendation, Investigate is evidence, Preview and Implement are a working result, Qualify is rigorous proof.
-  - **Blue, ownership:** ${pills(v.owner.core)} beside any program, file, service, or configuration you changed or propose to change outside the task's own files: created by this task, also used by others, or belonging to someone else.
-  - **Soft blue, context:** ${pills(CONTEXT_WORDS)}, and any other short label.
-- **Pill placement.** Mark evidence claims with [[Observed]] (witnessed in the real system), [[Inferred]] (reasoned from other signals), or [[Unverified]] (not checked). A known word may carry short detail: [[Passed 12/12]], [[Failed: 3 tests]]. One pill per bullet or table cell, with two exceptions: a sequence line joined by \`→\`, and a scoreboard, which is one line of counts such as [[Done 6]] [[Failed 1]] [[Needs you 1]] under the opening sentence of a long report. In a long reply, repeat every [[Needs you]] and [[Decision]] in a closing line. Never put pills in headings, and do not invent new status words.
-- **Every attention pill carries its action.** Follow the pill with the one fact the user needs to act on it, introduced by a bold lead-in word ending in a colon. These lead-ins get an icon: ${titled(Object.keys(ACTION_ICONS))}. Required for every red, yellow, and solid red pill and for [[Inferred]]; optional for green ones.
-  - [[Unverified]] means you *could not* check. If you can run the check yourself, run it and report the result instead. Otherwise give the fastest check and who can run it: "the new color on your screen. **Check:** reload and look at the first pill."
-  - [[Needs you]]: the exact action and what it unblocks. "**Do:** sign in to the staging dashboard; then I can read the deploy log."
-  - [[Decision]]: the options, your pick, and what you will do meanwhile. "Backfill, or make the column optional? I'd backfill. **Next:** I'll prepare it as a dry run."
-  - [[Failed]] or [[Broken]]: the cause and what you are doing about it. "Migration stopped on 41 empty rows. **Next:** preparing a backfill."
-  - [[Blocked]]: what blocks it and the smallest thing that unblocks it. "No access to the billing repository. **Unblock:** read access for this session."
-  - [[Partial]] or [[In progress]]: what remains. "3 of 5 pages converted. **Left:** pricing and checkout."
-  - [[Skipped]]: why, and how to run it anyway. "Load test, which you waived. **Run:** \`bun run load\`."
-  - [[At risk]] or [[Unsafe]]: what would make it fail and the guard against it. "Breaks if billing reads the old column. **Guard:** keep both columns for one release."
-  - [[Costs money]]: the amount, before acting. "About $4 for 20 video generations."
-  - [[Destructive]] or [[Irreversible]]: what is lost and how to get it back, or that nothing can. "Deletes 41 order rows. **Undo:** none; export them first."
-  - [[Shared]] or [[Foreign]]: who else is affected. "Every session picks this up on its next reload."
-  - [[Inferred]]: what it was inferred from. "From the last three deploy logs; I did not reproduce it."
-  - [[Done]], [[Fixed]], or [[Live]]: where to see it. "**See:** the address, file, or command that shows it."
-- **Headings and code.** Use \`##\` headings; \`###\` and deeper show their hash marks. Reserve inline code for literals the user may copy or search (paths, commands, exact identifiers); otherwise name subjects in plain words. Blockquotes render dim: asides only, never a caveat the user must see.
-- **Copyable text stays clean.** Keep pills out of paths, commands, code, literal output, and machine-readable data. Omit pills and tree shapes when the user asks for plain text, ASCII, or an exact format.`;
-}
-
-/** Earlier name, kept for callers of the first release. */
-export const colorBold = (markdown: string, palette: Palette | Colorize) =>
-	decorate(markdown, typeof palette === "function" ? { bold: palette } : palette);
+/**
+ * The reply_style section content. Pi wraps a section as <reply_style>\n…\n</reply_style>, so the
+ * section the model reads is the tested rules-b2.txt word for word. Every label, pill and lead-in
+ * word here must stay a known word of the tables above (test/reply-style.test.ts checks this).
+ */
+export const REPLY_STYLE = `The terminal draws [[Word]] as a colored pill and gives a bold lead label an icon.
+- Label: open every reply, and each subject of a long reply, with a bold label: Result, Status, Cause, Fix, Risk, Next, Plan, Evidence, Decision.
+- Pill: put one beside the subject whose state it names, with only these words: [[Done]] [[Passed]] [[Fixed]] [[Failed]] [[Blocked]] [[In progress]] [[Unverified]] [[Needs you]] [[Decision]] [[Destructive]] [[Costs money]].
+- Action: follow every pill except Done, Passed and Fixed with the one step that resolves it, led by a bold Do:, Check:, Next:, Unblock: or Undo:.
+- Keep pills out of code, paths and commands.`;
 
 export default function emphasis(pi: ExtensionAPI) {
 	let currentTheme: (() => ThemeLike) | undefined;
@@ -295,14 +270,14 @@ export default function emphasis(pi: ExtensionAPI) {
 	// The rules travel with the renderer: only a session that draws pills is told to write them.
 	pi.on("before_agent_start", (event) => {
 		const sections = (event.systemPromptOptions.sections ??= {});
-		if (currentTheme && process.env.PI_EMPHASIS_GUIDANCE !== "0") sections.reply_style = replyGuidance();
+		if (currentTheme) sections.reply_style = REPLY_STYLE;
 		else delete sections.reply_style;
 	});
 	pi.registerMarkdownTransformer((markdown, context) => {
 		if (!currentTheme || context.messageType !== "assistant") return markdown;
 		// Rebuild when the theme changes, so /theme switches recolor new output.
 		const theme = currentTheme();
-		if (built?.theme !== theme) built = { theme, palette: createPalette(theme, process.env.PI_EMPHASIS_COLOR || "mdLink") };
+		if (built?.theme !== theme) built = { theme, palette: createPalette(theme) };
 		return decorate(markdown, built.palette);
 	});
 }

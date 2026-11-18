@@ -1,5 +1,22 @@
 # Pi Emphasis
 
+## This fork
+
+This is a fork of [pi-emphasis](https://github.com/johnlindquist/pi-emphasis) by John Lindquist, at commit `f884b73`. The drawing (pills, colors, icons, labels, lead-ins) is upstream's. It differs in two ways:
+
+- **Compact rules.** The `reply_style` prompt section is a short tested rule set of about 290 tokens, in place of upstream's long guidance of about 2,400 tokens. It teaches 9 labels, 11 pill words and 5 lead-ins. The rules are the `REPLY_STYLE` constant in [`index.ts`](index.ts).
+- **No switches.** The four `PI_EMPHASIS_*` environment variables are gone. The rules are always on in the terminal interface, pills have rounded ends and icons, and bold takes the `mdLink` color.
+
+Sync with upstream: the remote `upstream` points at the original repository.
+
+```sh
+git fetch upstream
+git merge upstream/main
+bun run check
+```
+
+Merge conflicts usually sit in the guidance and the switches; keep this fork's side there. The rest of this README is upstream's, corrected where the fork makes it false.
+
 Replies you can scan. This [Pi](https://pi.dev/) extension turns `[[Done]]`, `[[Failed]]` and `[[Needs you]]` into colored pills with icons, gives headings and lead labels an icon from their word, and colors bold text, arrows and tree lines.
 
 ![A Pi reply about a failed deploy, with colored pills, icons and labels](screenshots/reply.png)
@@ -23,15 +40,17 @@ Checked on macOS only. Setup takes about two minutes if your terminal already ha
 
 ## Install
 
+This fork has no public address. Install it from its local path:
+
 ```sh
-pi install git:github.com/johnlindquist/pi-emphasis
+pi install /path/to/pi-emphasis
 ```
 
 Then run `/reload` in Pi, or start Pi again.
 
-- Update: `pi update --extensions`
-- Try once without installing: `pi -e git:github.com/johnlindquist/pi-emphasis`
-- Remove: `pi remove git:github.com/johnlindquist/pi-emphasis`
+- Update: `git pull` in the fork, then `/reload`
+- Try once without installing: `pi -e /path/to/pi-emphasis`
+- Remove: `pi remove /path/to/pi-emphasis`
 
 ## Set up your terminal
 
@@ -66,26 +85,18 @@ To keep your current font, install only the symbols with `brew install --cask fo
 
 You should see four rounded pills in green, yellow, soft red and solid red, each with an icon.
 
-**No Nerd Font, or you prefer plain chips?** Start Pi with the icons and rounded ends turned off. To make it permanent, put the two `export` lines in your shell profile, such as `~/.zshrc`:
-
-```sh
-export PI_EMPHASIS_PILL_ICONS=0
-export PI_EMPHASIS_ROUND_CAPS=0
-pi
-```
+**No Nerd Font?** This fork always draws icons and rounded ends; it has no switch to turn them off. Install a Nerd Font or the symbols-only font above.
 
 ## The rules come with it
 
 An agent writes pills only when it is told how. In Pi's terminal interface the extension adds a `reply_style` section to the system prompt on every run, so there is nothing to paste into an `AGENTS.md`. The section tells the agent:
 
-- which words to use for each color, and that every failure, ask and unchecked claim needs its pill
-- to open a reply with the kind of work it understood, and to mark consequences and ownership
-- to follow each attention pill with the action it calls for, such as the fastest check after `[[Unverified]]`
-- to write labels as plain words, because the extension adds the icons
+- to open every reply, and each subject of a long reply, with a bold label: Result, Status, Cause, Fix, Risk, Next, Plan, Evidence, Decision
+- to put a pill beside the subject whose state it names, with only these words: Done, Passed, Fixed, Failed, Blocked, In progress, Unverified, Needs you, Decision, Destructive, Costs money
+- to follow every pill except Done, Passed and Fixed with the one step that resolves it, led by a bold Do:, Check:, Next:, Unblock: or Undo:
+- to keep pills out of code, paths and commands
 
-The word lists in that section are read from the same tables that color the pills, so the rules and the drawing cannot drift apart. It adds about 1,500 tokens to the prompt. Print, JSON and RPC runs do not get the section, since nothing there draws pills.
-
-To keep the drawing and write your own rules, set `PI_EMPHASIS_GUIDANCE=0`.
+The section is fixed text. A test checks that every label, pill word and lead-in it names gets its color and icon, so the rules and the drawing cannot drift apart. It adds about 290 tokens to the prompt. Print, JSON and RPC runs do not get the section, since nothing there draws pills.
 
 ## Pills
 
@@ -120,26 +131,21 @@ Your own messages, inline code, fenced code and escaped asterisks are left alone
 
 ## Settings
 
-Environment variables. Set them in the shell before starting Pi, or in your shell profile:
+This fork has no settings. Bold takes the theme's `mdLink` color, pills have rounded ends and icons, and the rules are always added in the terminal interface.
 
-- `PI_EMPHASIS_COLOR`: theme color for bold text (default `mdLink`).
-- `PI_EMPHASIS_ROUND_CAPS=0`: square chips, for fonts without Nerd Font symbols.
-- `PI_EMPHASIS_PILL_ICONS=0`: no icons in pills or on labels.
-- `PI_EMPHASIS_GUIDANCE=0`: do not add the reply-style rules to the prompt.
-
-To add a word, an icon or a synonym, edit the tables at the top of [`index.ts`](index.ts). The rules are the `replyGuidance` function in the same file.
+To add a word, an icon or a synonym, edit the tables at the top of [`index.ts`](index.ts). The rules are the `REPLY_STYLE` constant in the same file.
 
 ## Troubleshooting
 
 | You see | Cause | Fix |
 |---|---|---|
 | `[[Done]]` as plain text | The extension is not loaded | Run `/reload`. Check that `pi list` shows pi-emphasis |
-| Boxes or question marks in or around pills | The terminal has no Nerd Font symbols | [Set up your terminal](#set-up-your-terminal), or turn icons and rounded ends off |
+| Boxes or question marks in or around pills | The terminal has no Nerd Font symbols | [Set up your terminal](#set-up-your-terminal) |
 | Icons that overlap the next letter | The font draws its icons two cells wide | Use the "Mono" variant of the Nerd Font, such as JetBrainsMono Nerd Font Mono |
 | Pills that are all one color, in reverse video | Pi's theme has no panel colors, which happens with the `system` theme when the terminal reports none | Choose a theme with `/theme`, such as `dark` |
 | Solid red, cyan or blue pills in odd shades | Those three use your terminal's own colors | Change the terminal's color theme |
 | Bold that looks no heavier than normal text | The terminal draws normal text at a medium weight, or its font has no real bold | Choose a font with a distinct bold. In Ghostty, `font-style-bold` selects a heavier face |
-| The agent writes no pills | The rules reach the agent only in Pi's terminal interface, and not when `PI_EMPHASIS_GUIDANCE=0` | Unset the variable. Print, JSON and RPC runs never get the rules |
+| The agent writes no pills | The rules reach the agent only in Pi's terminal interface | Use the terminal interface. Print, JSON and RPC runs never get the rules |
 | Pills inside code blocks stay as typed | Code is left alone on purpose | Nothing to fix |
 
 ## Limits
