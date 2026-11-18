@@ -12,7 +12,8 @@ Tree:
 - renderer / labels and lead-ins -> icons as before (round 6); color blue, theme mdLink, as the default; setting `labels` with any theme color or hex; the owner's own settings use cyan, mdListBullet (round 9 and after, 2026-11-18)
 - renderer / closing line of asks -> none (rules round, 2026-11-18)
 - renderer / colors setting -> per tone: a pi theme color name or "#rrggbb"; fill per tone: panel | solid | text (round 6, 2026-11-18)
-- rules -> c3, 358 prompt tokens on cpa/claude-opus-5-5 (rules round, 2026-11-18)
+- rules -> c4g, 310 prompt tokens on cpa/claude-opus-5-5, 188 by tiktoken o200k_base (second rules round, 2026-11-18; c3 had 358 and 200)
+- rules / consequence pills -> Costs money and Destructive once, before an action that waits for approval; a cost is mentioned only there or when it passes the approved amount (owner rule 2026-11-18T10:40Z, second rules round)
 - terminal font -> Ghostty font-family "MonaspiceNe Nerd Font" (owner's config, outside this repository)
 Tokens:
 - Tones: success (theme success), error (theme error), warning (theme warning), ask (theme warning), danger (theme error), mode (theme accent), owner (theme customMessageLabel), neutral (theme selectedBg + text).
@@ -33,13 +34,13 @@ States:
 - A "$" before a digit in prose and headings is escaped for pi's Markdown, which would read it as the start of LaTeX math.
 - A reply that opens with a list takes the count line above the list, so the line never splits the list.
 - A setting that names a color the pi theme does not know falls back to that field's default.
-Copy (the reply_style section, c3):
+Copy (the reply_style section, c4g):
   The terminal draws [[Word]] as a colored pill and gives a bold lead label an icon.
-  - Open with a bold label: **Result:** ... When the reply has several subjects, put a kind-of-work pill first: [[Implement]] **Result:** ... Kinds: Brainstorm, Investigate, Preview, Implement, Qualify.
-  - Long reply: a ## heading per group; each bullet **Subject** [[Pill]] text.
-  - Pills: [[Done]] [[Passed]] [[Fixed]] [[Observed]] [[Recommended]] [[Failed]] [[Blocked]] [[Partial]] [[In progress]] [[Unverified]] [[At risk]] [[Needs you]] [[Decision]] [[Destructive]] [[Costs money]] [[Shared]].
+  - Open with **Result:**.
+  - Long reply: open with [[Kind]] **Result:**, Kind one of Brainstorm, Investigate, Preview, Implement, Qualify; a ## heading per group; each bullet **Subject** [[Pill]] text.
+  - Pills: Done, Passed, Fixed, Observed, Recommended, Failed, Blocked, Partial, In progress, Unverified, At risk, Needs you, Decision, Destructive, Costs money, Shared.
   - After a pill, the step that resolves it, led by a bold Do:, Check:, Next:, Unblock:, Left:, Guard:, Undo: or See:.
-  - Keep pills out of code, paths and commands.
+  - Costs money and Destructive: once, before an action that waits for approval. Mention a cost only there, or when it passes the approved amount.
 Settings (pi settings.json, all optional):
   "emphasis": { "edges": "round", "icons": "filled", "labels": "mdLink", "colors": { "<tone>": "<theme color or #rrggbb>" }, "fill": { "<tone>": "panel|solid|text" } }
 Open for the build: none
