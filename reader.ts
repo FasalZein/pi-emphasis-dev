@@ -20,6 +20,11 @@ const FENCE_OPEN = /^(\x60{3,}|~{3,})(.*)$/;
 const FENCE_CLOSE = /^(\x60{3,}|~{3,}) *$/;
 const HEADING = /^#{1,6}(?: |$)/;
 const THEMATIC_BREAK = /^(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/;
+/** THEMATIC_BREAK.test, skipping the regex for a line that cannot open with "*", "-" or "_". */
+const thematicBreak = (s: string) => {
+	const c = s[0];
+	return (c === "*" || c === "-" || c === "_") && THEMATIC_BREAK.test(s);
+};
 // pi's display math block (pi-tui latexBlock): "$$" or "\[" opening a block, up to the first "$$" or "\]"
 // that ends a line.
 const MATH_MARKS = [
@@ -40,6 +45,9 @@ const INTERRUPT = /^(?:\x60{3,}|~{3,}|#{1,6}(?: |$)|>|<|(?:[-*+]|\d{1,9}[.)])(?:
 
 /** A line as pi's parser sees its block: tabs as three spaces, block quote markers counted and removed. */
 function blockOf(line: string): { depth: number; indent: number; body: string; lead: number } {
+	// A line that opens with neither a space, a tab nor ">" has no indent and no quote marker.
+	const first = line.charCodeAt(0);
+	if (first !== 0x20 && first !== 0x09 && first !== 0x3e && !line.includes("\t")) return { depth: 0, indent: 0, body: line, lead: 0 };
 	let rest = line.replace(/\t/g, "   ");
 	const lead = rest.match(/^ */)![0].length;
 	let depth = 0;
@@ -53,7 +61,10 @@ function blockOf(line: string): { depth: number; indent: number; body: string; l
 
 /** Sorted ranges with overlapping ones joined. */
 function mergeRanges(ranges: Range[]): Range[] {
-	if (ranges.length < 2) return ranges.map(([start, end]) => [start, end]);
+	let ordered = true;
+	for (let i = 1; i < ranges.length && ordered; i++) ordered = ranges[i][0] > ranges[i - 1][1];
+	// Already sorted with gaps between: the merge would copy them unchanged.
+	if (ordered) return ranges.map(([start, end]) => [start, end]);
 	const merged: Range[] = [];
 	for (const [start, end] of [...ranges].sort((a, b) => a[0] - b[0])) {
 		const last = merged.at(-1);
@@ -203,7 +214,7 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 					let k = i + 1;
 					// The paragraph ends at a blank line or a line that opens another block.
 					// pi's math block also cuts the paragraph where it opens (closed, or pending with math in it).
-					for (; k < lines.length && lines[k].trim() && !PARAGRAPH_END.test(lines[k].trimStart()) && !THEMATIC_BREAK.test(lines[k].trim()) && !opensMathBlock(lines, k, see); k++) {
+					for (; k < lines.length && lines[k].trim() && !PARAGRAPH_END.test(lines[k].trimStart()) && !thematicBreak(lines[k].trim()) && !opensMathBlock(lines, k, see); k++) {
 						if (lines[k].includes(close) && hasClosing(lines[k], close)) {
 							closed = true;
 							break;
@@ -335,7 +346,7 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 			indentedBase = undefined;
 		}
 		// Entering or leaving a block quote opens new containers, unless the line continues a paragraph lazily.
-		const opensBlock = INTERRUPT.test(body) || THEMATIC_BREAK.test(body);
+		const opensBlock = INTERRUPT.test(body) || thematicBreak(body);
 		const lazy = paragraph && depth < previousDepth && body.trim() !== "" && !opensBlock;
 		if (depth !== previousDepth && !lazy) {
 			paragraph = false;
@@ -368,7 +379,7 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 			push({ kind: "prose", literal: literalOf(i, false), plain: false }, i);
 			continue;
 		}
-		if (THEMATIC_BREAK.test(body) && indent - base <= 3) {
+		if (thematicBreak(body) && indent - base <= 3) {
 			if (depth === 0 && listColumns.length === 0) blockEnd = i;
 			paragraph = false;
 			push(code, i);
@@ -383,7 +394,7 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 		// marker or five after a list marker open indented code.
 		let innerDepth = 0;
 		for (;;) {
-			const m = THEMATIC_BREAK.test(content) ? null : content.match(LIST_MARKER);
+			const m = thematicBreak(content) ? null : content.match(LIST_MARKER);
 			// The first item of a list interrupts a paragraph only when it is not empty and, if ordered, starts
 			// at 1; pi's parser does not always hold to this. Such a line is read both ways: as an item for
 			// what it opens on this line, as paragraph text for the lines after it.

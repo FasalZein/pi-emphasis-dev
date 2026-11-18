@@ -315,6 +315,8 @@ function createPalette(theme: Theme, settings: EmphasisSettings = DEFAULT_SETTIN
 // Escaped bold markers, bold markers, or a [[pill]] of 1-32 characters. A backslash run is read from
 // its start only, so a long run without a marker costs time linear in its length.
 const INLINE = /(?<!\\)(\\*)(\*\*|__)|\[\[([^\[\]\n]{1,32})\]\]/g;
+// INLINE, then the glyphs that take a color: checks, crosses, arrows and tree connectors.
+const INLINE_OR_GLYPH = new RegExp(INLINE.source + "|([✓✔])|([✗✘])|(→)|([├└]──)", "g");
 // A written scoreboard: a line of two or more pills and nothing else.
 const PILLS_ONLY = /^\s*\[\[[^\[\]\n]{1,32}\]\](?:\s*\[\[[^\[\]\n]{1,32}\]\])+\s*$/;
 /** The fewest state pills (ask, error, warning or success) a reply needs for a count line. */
@@ -374,7 +376,13 @@ interface Head {
 	scoreboard: boolean;
 }
 
-const boldEnds = (palette: Palette) => palette.bold("\u0000").split("\u0000") as [string, string];
+/** The escapes that open and close bold color, per palette: a palette's colors do not change. */
+const boldMemo = new WeakMap<Palette, [string, string]>();
+const boldEnds = (palette: Palette) => {
+	let ends = boldMemo.get(palette);
+	if (!ends) boldMemo.set(palette, (ends = palette.bold("\u0000").split("\u0000") as [string, string]));
+	return ends;
+};
 
 /** Draws each line of a reply; every output line is the drawing of the input line with the same index. */
 function draw(lines: string[], palette: Palette): Drawing {
@@ -550,19 +558,12 @@ const GLYPHS = /[✓✔✗✘→├└]/;
 function drawProse(line: string, literal: Range[], palette: Palette, open: string, close: string, drawn?: string[]): string {
 	if (!PROSE_MARKS.test(line)) return line;
 	const parts = partsOf(line, literal);
-	if (!parts[0].literal) parts[0].text = parts[0].text.replace(LEAD_LABEL, (_, before: string, label: string, after: string) => before + withLabelIcon(label) + after);
+	if (!parts[0].literal && parts[0].text.includes("**")) parts[0].text = parts[0].text.replace(LEAD_LABEL, (_, before: string, label: string, after: string) => before + withLabelIcon(label) + after);
 	let result = "";
 	let inBold: string | undefined;
 	const reopen = () => (inBold ? `\x1b[1m${open}` : "");
-	const glyphs = (text: string) => {
-		if (!GLYPHS.test(text)) return text;
-		const after = (m: string, color: Colorize) => color(m) + (inBold ? open : "");
-		if (palette.passed) text = text.replace(/[✓✔]/g, (m) => after(m, palette.passed!));
-		if (palette.failed) text = text.replace(/[✗✘]/g, (m) => after(m, palette.failed!));
-		if (palette.arrow) text = text.replace(/→/g, (m) => after(m, palette.arrow!));
-		if (palette.tree) text = text.replace(/[├└]──/g, (m) => after(m, palette.tree!));
-		return text;
-	};
+	// A glyph takes its color and, inside bold, the bold color again after it.
+	const glyph = (m: string, color: Colorize | undefined) => (color ? color(m) + (inBold ? open : "") : m);
 	for (const part of parts) {
 		if (part.literal) {
 			// Pi's code color ends with a foreground reset; restore the bold color after it.
@@ -571,27 +572,33 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
 		}
 		// Pills are read from the written text, before any escape or color is added around them.
 		const prose = withActionIcons(escapeProse(part.text.includes("]] [[") ? part.text.replace(PILL_GAP, "]]  [[") : part.text));
-		let last = 0;
-		for (const m of prose.matchAll(INLINE)) {
-			result += glyphs(prose.slice(last, m.index));
-			last = m.index + m[0].length;
-			const [match, slashes, marker, label] = m;
+		// One pass over markers, pills and glyphs. A glyph never holds a character a marker or a pill starts
+		// with, so the matches are those of INLINE with the glyphs of the text between them.
+		const each = (match: string, slashes?: string, marker?: string, label?: string, passed?: string, failed?: string, arrow?: string, tree?: string) => {
+			if (passed !== undefined) return glyph(match, palette.passed);
+			if (failed !== undefined) return glyph(match, palette.failed);
+			if (arrow !== undefined) return glyph(match, palette.arrow);
+			if (tree !== undefined) return glyph(match, palette.tree);
 			if (label !== undefined) {
-				if (!palette.pills || !label.trim()) result += match;
-				else {
-					drawn?.push(label);
-					result += pill(label, palette) + reopen();
-				}
-			} else if ((slashes ?? "").length % 2 === 1) result += match; // escaped marker
-			else if (!inBold) {
+				if (!palette.pills || !label.trim()) return match;
+				drawn?.push(label);
+				return pill(label, palette) + reopen();
+			}
+			if ((slashes ?? "").length % 2 === 1) return match; // escaped marker
+			if (!inBold) {
 				inBold = marker;
-				result += slashes + marker + open;
-			} else if (inBold === marker) {
+				return slashes! + marker + open;
+			}
+			if (inBold === marker) {
 				inBold = undefined;
-				result += slashes + close + marker;
-			} else result += match;
-		}
-		result += glyphs(prose.slice(last));
+				return slashes! + close + marker;
+			}
+			return match;
+		};
+		// The shorter INLINE is faster where the text holds no glyph; its callback gets only its own groups.
+		result += GLYPHS.test(prose)
+			? prose.replace(INLINE_OR_GLYPH, (m: string, s?: string, k?: string, l?: string, p?: string, f?: string, a?: string, t?: string) => each(m, s, k, l, p, f, a, t))
+			: prose.replace(INLINE, (m: string, s?: string, k?: string, l?: string) => each(m, s, k, l));
 	}
 	// An unclosed span (streaming or literal asterisks) ends its color at the line end.
 	if (inBold) result += close;
