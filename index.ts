@@ -934,11 +934,18 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
 	const marks = plan?.marks;
 	const parts = partsOf(line, literal);
 	const written = parts.map((part) => part.text);
-	if (!parts[0].literal && parts[0].text.includes("**")) {
+	// The lead label's icon: where it goes in part 0 and its length.
+	let iconAt = 0;
+	let iconLength = 0;
+	if (marks?.size && !parts[0].literal && parts[0].text.includes("**")) {
 		// Only a lead label pi draws bold takes its icon.
 		const lead = LEAD_LABEL.exec(parts[0].text);
-		if (lead && marks?.get(lead[1].length - 2) === "open" && marks.get(lead[1].length + lead[2].length) === "close")
-			parts[0].text = lead[1] + withLabelIcon(lead[2]) + lead[3] + parts[0].text.slice(lead[0].length);
+		if (lead && marks.get(lead[1].length - 2) === "open" && marks.get(lead[1].length + lead[2].length) === "close") {
+			const label = withLabelIcon(lead[2]);
+			iconAt = lead[1].length;
+			iconLength = label.length - lead[2].length;
+			parts[0].text = lead[1] + label + lead[3] + parts[0].text.slice(lead[0].length);
+		}
 	}
 	let result = "";
 	let inBold = plan?.continued === true;
@@ -958,12 +965,15 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
 		}
 		const glyphs = GLYPHS.test(part.text);
 		const pattern = glyphs ? INLINE_OR_GLYPH : INLINE;
-		// The start in the line of each match, in the order the drawing meets them: the steps before the drawing
-		// add no marker, pill or glyph. Read only when the line draws bold.
-		const starts = marks?.size ? [...written[p].matchAll(pattern)].map((m) => partAt + m.index + (m[1] ?? "").length) : undefined;
-		let n = 0;
 		// Pills are read from the written text, before any escape or color is added around them.
 		const prose = escapeProse(part.text.includes("]] [[") ? part.text.replace(PILL_GAP, "]]  [[") : part.text);
+		// The start in the line of each match, when the line draws bold. Without escapes or gaps added, a match's
+		// index in prose is its index in the line, past the lead label's icon; otherwise the matches of the
+		// written part give them in order (the steps before the drawing add no marker, pill or glyph).
+		const starts = marks?.size && prose !== part.text ? [...written[p].matchAll(pattern)].map((m) => partAt + m.index + (m[1] ?? "").length) : undefined;
+		const startOf = (index: number, slashes: string | undefined) =>
+			!marks?.size ? undefined : starts ? starts[n] : partAt + index + (slashes ?? "").length - (p === 0 && index >= iconAt + iconLength && iconLength > 0 ? iconLength : 0);
+		let n = 0;
 		// A pill or glyph next to a delimiter is drawn as written: its color escapes would change how pi reads the
 		// delimiter. Next to a drawn delimiter, on the side inside the bold, it is drawn.
 		const kept = (m: string, index: number, start: number | undefined) => {
@@ -977,7 +987,8 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
 		// One pass over markers, pills and glyphs. A glyph never holds a character a marker or a pill starts
 		// with, so the matches are those of INLINE with the glyphs of the text between them.
 		const each = (index: number, match: string, slashes?: string, marker?: string, label?: string, passed?: string, failed?: string, arrow?: string, tree?: string) => {
-			const start = starts?.[n++];
+			const start = startOf(index, slashes);
+			n++;
 			if (label === undefined && marker === undefined) {
 				if (kept(match, index, start)) return match;
 				if (passed !== undefined) return glyph(match, palette.passed);

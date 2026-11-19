@@ -1119,7 +1119,12 @@ const NEXT_SIGN = /[\\\[!*_~]/g;
  * without changing that character, and a line break token leaves it whitespace or empty, which the emphasis
  * rule reads alike.
  */
+const NO_EMPHASIS_SIGN = /[^*_]*/y;
 function lexInline(all: string, from: number, to: number, literal: Range[], inLink: boolean, read: Lexed, fast: boolean): void {
+	// Text without "*" or "_" holds no strong span and no token that could hold one.
+	NO_EMPHASIS_SIGN.lastIndex = from;
+	NO_EMPHASIS_SIGN.exec(all);
+	if (NO_EMPHASIS_SIGN.lastIndex >= to) return;
 	const text = all.slice(from, to);
 	let masked = text.includes("\\") ? text.replace(ANY_PUNCTUATION, (s) => "+".repeat(s.length)) : text;
 	if (MAY_SKIP.test(masked)) masked = masked.replace(BLOCK_SKIP, (s) => "[" + "a".repeat(s.length - 2) + "]");
