@@ -48,6 +48,9 @@ for (const [name, inputs] of Object.entries(SHOWN))
 // HTML in containers, a second comment on a line, comments in HTML text, comment ranges, math after a comment
 // or a closed HTML block.
 const BOUNDARIES: string[] = ["text\n<PRE>\n~~~\n[[Done p0q]]\n~~~","text\n<DIV>\n~~~\n[[Done p1q]]\n~~~","<div>\n# h\n    code\n\n~~~\n[[Done p2q]]","<span>\n# h\n    code\n\n~~~\n[[Done p3q]]","<pre>\n# h\n    x\n    </pre>\n~~~\n[[Done p4q]]","<div>\n \n~~~\n\n~~~\n[[Done p5q]]","> <div>\n>\n> ~~~\n> ~~~\n> [[Done p6q]]","- <div>\n\n  ~~~\n  code\n  ~~~\n  [[Done p7q]]","> <span>\n>\n> ~~~\n> ~~~\n> [[Done p8q]]","<pre>\n<!-- A --> <!-- B\n\n[[Done p9q]]\n-->\n</pre>","<pre>\n<!-- A\n--> <!-- B\n[[Done p10q]]\n-->\n</pre>","<div>\n<!--1--> <!--2\n[[Done p11q]]\n-->\n\n","<pre>\n# <!-- x\n\n[[Done p12q]]\n-->\n</pre>","<pre>\n`<!--`\n\n[[Done p13q]]\n-->\n</pre>","<div>\n<!-- a\n \n[[Done p14q]]\n-->\n\n","<pre>\nx <!-- a\n</pre>\n\nStatus [[Done p15q]]","<pre>\nx <!-- a\n\n--> [[Done p16q]]\n</pre>","<pre>\ntext <!-- note\n\nStatus [[Done p17q]]\n--> [[Done p18q]]\n","<!-- ok -->\n$$\n[[Done p19q]]\n$$","<!--\n-->\n$$\n[[Done p20q]]\n$$","<!-- ok -->\n\\[\n[[Done p21q]]\n\\]","<pre></pre>\n    [[Done p22q]]\n$$\n[[Done p23q]]\n$$"];
+// After unsure pending math no HTML block opens; a backtick in HTML text opens no code span; a list item that a
+// blank line and a quote ended is not followed further.
+BOUNDARIES.push("x $$\n\n<pre>\nx <!-- c\n\nStatus [[Done p46q]]", "<pre>\na `b\n[[Done p47q]]\nc` d\n</pre>", "- x\n\n> ```\n> a\n> ```\n\n\t```\n\tb\n\n\t```\n\n- S [[Done p48q]]");
 for (const md of BOUNDARIES) test(`every pill as pi shows it in ${JSON.stringify(md)}`, () => expectPillsAsPi(ext, md));
 
 // Limit inputs with the drawing of e90277b per pill (in order of first occurrence).
