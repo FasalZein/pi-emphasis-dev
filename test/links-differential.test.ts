@@ -6,7 +6,7 @@
 // test/links-oracle.ts.
 // Per reply: (1) links: the ordered (target, caption) spans and the printed text (drawn pills written back,
 // count line removed) equal pi's. (2) pills: a marked pill is drawn only where pi shows it as prose, and the count
-// line counts exactly the drawn ones. (3) a pill pi shows that is not drawn is over-protection: the owner rule
+// line counts exactly the drawn ones. (3) a pill pi shows that is not drawn is over-protection: the design
 // allows it where the reader cannot prove a link's bounds; it is counted and printed per class.
 // (4) cache: replaced-suffix sequences on one registration equal a fresh drawing.
 import { expect, test } from "bun:test";

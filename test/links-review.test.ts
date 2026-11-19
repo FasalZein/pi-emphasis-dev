@@ -1,4 +1,4 @@
-// Review round 1 on reader-links (b4d4367): each review input as a pi-tui differential (test/links-oracle.ts).
+// Link regression inputs, each as a pi-tui differential (test/links-oracle.ts).
 // Expected values come from pi's rendering of the raw reply: ordered (target, caption) spans, the printed text,
 // and, for marked pills ("p<n>q"), whether pi shows them as prose (drawn and counted exactly then).
 import { describe, expect, test } from "bun:test";

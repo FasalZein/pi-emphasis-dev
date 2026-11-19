@@ -64,7 +64,7 @@ export function read(lines: string[], boldFg: string): Reading {
 	return { text: text.replace(gap, "\u0005 \u0005"), style: style.replace(/p,+p/g, "pp"), targets, falseColor, uncolored };
 }
 
-// The failing sequences of review round 1 (and of the first review), one per class.
+// Regression inputs for bold drawing, one per bug class.
 export const REVIEW = [
 	"The powers are 2 ** 3 ** 4.",
 	"2 ** 3 and **bold** here",

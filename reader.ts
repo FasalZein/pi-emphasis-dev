@@ -518,13 +518,13 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 					// marked's link text holds brackets one level deep: a "[" two levels in ("[a [[Done]]](/x)") leaves
 					// the outer text no link.
 					// Such text keeps the link's shape, and a pill drawn in it would make its escapes a link: it is left
-					// as written too (owner decision 2026-11-18), but marks no link around it as dead.
+					// as written too, but marks no link around it as dead.
 					if (opens.length >= 2) opens[opens.length - 2].deep = true;
 					opens.push({ at: p, image: text[p - 1] === "!" && !escapedAt(text, p - 1), dead: false, deep: false });
 				}
 				else if (c === "]") {
-					// A link is drawn by pi as a whole: its text, destination and title stay literal (owner decision
-					// 2026-11-18: a pill or bold in link text would break the link).
+					// A link is drawn by pi as a whole: its text, destination and title stay literal (a pill or bold in
+					// link text would break the link).
 					const label = opens.pop();
 					if (label && !label.dead && !asWritten()) {
 						let end: [number, number] | undefined;
