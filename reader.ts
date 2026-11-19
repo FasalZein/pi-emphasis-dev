@@ -40,6 +40,8 @@ const PARAGRAPH_END = /^(?:\x60{3,}|~{3,}|#{1,6}(?: |$)|>|<|[-*+] +\S|1[.)] +\S)
 // before its LaTeX rule when they start earlier: "[", "]", "(", ")", "*", "_", "~", ">".
 const SPECIAL_CODES = new Uint8Array(128);
 for (const c of [0x5c, 0x60, 0x24, 0x3c, 0x5b, 0x5d, 0x28, 0x29, 0x2a, 0x5f, 0x7e, 0x3e]) SPECIAL_CODES[c] = 1;
+/** The characters of SPECIAL_CODES as one class: a regex search skips plain text faster than a loop. */
+const SPECIAL = /[\\\x60$<[\]()*_~>]/g;
 const WORD_CHAR = /[\p{L}\p{N}]/u;
 const SPACE = /\s/;
 // A link title (marked's title rule); it may hold line breaks.
@@ -492,10 +494,10 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 			// Jump to the next character that may open a code span, a comment, math, an escape or a construct.
 			if (nextUrl >= 0 && nextUrl < p) nextUrl = urlStart(text, p);
 			// (Codes of 128 and above are read before the table: an index past its end is a slow load in V8.)
-			for (; p < text.length && p !== nextUrl; p++) {
-				const unit = text.charCodeAt(p);
-				if (unit < 128 && SPECIAL_CODES[unit] === 1) break;
-			}
+			SPECIAL.lastIndex = p;
+			const special = SPECIAL.exec(text);
+			p = special ? special.index : text.length;
+			if (nextUrl >= 0 && nextUrl < p) p = nextUrl;
 			if (p >= text.length) break;
 			if (p === nextUrl) {
 				// pi links no bare URL inside the text of a link. When the reader cannot prove that link, it protects
@@ -1514,7 +1516,8 @@ const ANY_PUNCTUATION = /\\[\p{P}\p{S}]/gu;
 /** marked's blockSkip: inline links, code spans and HTML tags, masked so that no delimiter inside them pairs. */
 /** Signs without which BLOCK_SKIP masks nothing. */
 const MAY_SKIP = /\]\(|\x60|</;
-const BLOCK_SKIP = /\[(?:[^\[\]\x60]|(?<a>\x60+)[^\x60]+\k<a>(?!\x60))*?\]\((?:\\[\s\S]|[^\\\(\)]|\((?:\\[\s\S]|[^\\\(\)])*\))*\)|(?<!\x60)()(?<b>\x60+)[^\x60]+\k<b>(?!\x60)|<(?! )[^<>]*?>/g;
+// (Numbered groups, not named ones: a match of a regex with named groups builds a groups object.)
+const BLOCK_SKIP = /\[(?:[^\[\]\x60]|(\x60+)[^\x60]+\1(?!\x60))*?\]\((?:\\[\s\S]|[^\\\(\)]|\((?:\\[\s\S]|[^\\\(\)])*\))*\)|(?<!\x60)()(\x60+)[^\x60]+\3(?!\x60)|<(?! )[^<>]*?>/g;
 const LINK_LABEL = String.raw`(?:\[(?:\\[\s\S]|[^\[\]\\])*\]|\\[\s\S]|\x60+(?!\x60)[^\x60]*?\x60+(?!\x60)|\x60\x60+(?=\])|[^\[\]\\\x60])*?`;
 const LINK = new RegExp(
 	String.raw`!?\[(${LINK_LABEL})\]\(\s*(<(?:\\.|[^\n<>\\])+>|[^ \t\n\x00-\x1f]+|(?=\)))(?:(?:[ \t]+(?:\n[ \t]*)?|\n[ \t]*)("(?:\\"?|[^"\\])*"|'(?:\\'?|[^'\\])*'|\((?:\\\)?|[^)\\])*\)))?\s*\)`,
@@ -1649,9 +1652,79 @@ function emStrongAt(text: string, masked: string, at: number, prev: string): { e
  * level. literal: the reader's literal ranges in text coordinates, sorted.
  */
 export function strongPairs(text: string, literal: Range[]): { pairs: StrongPair[]; crossesLine: boolean } {
+	const simple = simplePairs(text, literal);
+	if (simple) return simple;
 	const read: Lexed = { pairs: [], crossesLine: false, links: text.includes("](") };
 	lexInline(text, 0, text.length, literal, false, read, !URL_SIGN.test(text));
 	return { pairs: read.pairs, crossesLine: read.crossesLine };
+}
+
+/** A sign that fast lexInline reads as a token other than text, "*" emphasis and literal ranges: escape, "_", strikethrough. */
+const NOT_SIMPLE = /[\\_~]/;
+/**
+ * strongPairs for simple text, or undefined. Simple: no URL_SIGN, no NOT_SIMPLE sign and no "](" (so "[" is
+ * text), every "*" run exactly "**" with ASCII characters (or the text's ends) around it and outside literal
+ * ranges, and every run that the lexer tries as an opener finds its closer. lexInline then reads only "**"
+ * tokens, literal ranges and fast text tokens, and emStrongAt reduces to this:
+ * - The opener test reads the text (opensLeft is emStrongAt's test for an ASCII previous character). The
+ *   previous character is the one before the run (a text token ends there), or none at the start of the read
+ *   text or right after a literal range (no text token before it).
+ * - The closer scan reads the masked text of the read text (BLOCK_SKIP only; no escape). FIRST_AST needs "__",
+ *   so the scan is R_DELIM_AST_REST from the opener, and each of its capturing alternatives reads one character
+ *   before the run and one after it, as runKind does; the masked text must keep every run.
+ * - With every run of length 2 and the character before an opener never "*", a left-only run adds 2, a right or
+ *   both-flanking run takes 2, and the run that brings the total to 0 closes a strong token.
+ * An opener that fails would make the lexer try its second "*" alone: the full reading handles that.
+ */
+function simplePairs(text: string, literal: Range[]): { pairs: StrongPair[]; crossesLine: boolean } | undefined {
+	if (NOT_SIMPLE.test(text) || text.includes("](") || URL_SIGN.test(text)) return undefined;
+	const runs: number[] = [];
+	for (let q = text.indexOf("*"); q >= 0; q = text.indexOf("*", q + 2)) {
+		if (text[q + 1] !== "*" || text[q + 2] === "*" || text.charCodeAt(q - 1) >= 128 || text.charCodeAt(q + 2) >= 128) return undefined;
+		runs.push(q);
+	}
+	const literalEnds = new Set<number>();
+	for (const [s, e] of literal) {
+		if (text.slice(s, e).includes("*")) return undefined;
+		literalEnds.add(e);
+	}
+	const pairs: StrongPair[] = [];
+	let crossesLine = false;
+	// Reads runs a to b - 1, the runs of the text from..to; false when an opener fails.
+	const read = (from: number, to: number, a: number, b: number): boolean => {
+		if (a === b) return true;
+		const part = text.slice(from, to);
+		const masked = MAY_SKIP.test(part) ? part.replace(BLOCK_SKIP, (s) => "[" + "a".repeat(s.length - 2) + "]") : part;
+		if (masked !== part) {
+			let stars = 0;
+			for (let q = masked.indexOf("*"); q >= 0; q = masked.indexOf("*", q + 1)) stars++;
+			if (stars !== 2 * (b - a)) return false;
+		}
+		for (let k = a; k < b; ) {
+			const q = runs[k];
+			if (!opensLeft(q === from || literalEnds.has(q) ? "" : text[q - 1], "**", q + 2 < to ? text[q + 2] : "")) return false;
+			let total = 2;
+			let close = -1;
+			for (let m = k + 1; m < b; m++) {
+				const r = runs[m] - from;
+				const kind = runKind(masked[r - 1], "**", r + 2 < masked.length ? masked[r + 2] : "");
+				if (kind === "none") continue;
+				total += kind === "left" ? 2 : -2;
+				if (total === 0) {
+					close = m;
+					break;
+				}
+			}
+			if (close < 0) return false;
+			const c = runs[close];
+			pairs.push([q, c]);
+			crossesLine ||= spans(text, q, c + 2);
+			if (!read(q + 2, c, k + 1, close)) return false;
+			k = close + 1;
+		}
+		return true;
+	};
+	return read(0, text.length, 0, runs.length) ? { pairs, crossesLine } : undefined;
 }
 
 /** What lexInline reads: the strong pairs; whether a link, emphasis or strikethrough token spans a line break. */
