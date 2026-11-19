@@ -54,6 +54,8 @@ describe("reference-link boundaries", () => {
 		"See [doc][label name]\n\n[label\nname]: /a**b**c",
 		"See [doc][label name]\n\n[label\nname]: /[[Done]]",
 		"See [d**o**c][label name]\n\n> - [label\n> name]: /x",
+		"See [d**o**c][a b]\n\n[a\n\nb]: /x",
+		"See [d**o**c][label > name]\n\n[label\n> name]: /x",
 	])
 		test("a reference link keeps pi's target in " + JSON.stringify(md), () => keepsLinks(md));
 	for (const md of ["Status [x [[Done p0q]]][r]\n\n~~~\n[r]: /unused\n~~~", "Status [[Done p0q]] [r]\n\n\x60\x60\x60\n[r]: /unused\n\x60\x60\x60"])
@@ -82,7 +84,7 @@ describe("a tab in a two-line link", () => {
 });
 
 describe("bare URL boundaries", () => {
-	for (const md of ["See [text https://x.test/a__b][r]", "See [text https://x.test/[[Done]]][r]", "See [text https://x.test/a**b**c][r] **x**", "See [t https://x.test/[[Done]]][r][]"])
+	for (const md of ["See [text https://x.test/a__b][r]", "See [text https://x.test/[[Done]]][r]", "See [text https://x.test/a**b**c][r] **x**", "See [t https://x.test/[[Done]]][r][]", "See https://x.test/**y**，**b**"])
 		test("an undefined reference after a bare URL leaves pi's URL whole in " + JSON.stringify(md), () => keepsLinks(md));
 	for (const md of ["See https://x.test/a，状态[[Done p0q]]", "See www.x.test/a。[[Done p0q]]", "Mail a@x.test，[[Done p0q]]"])
 		test("pi's bare URL ends at CJK punctuation: the pill after it is drawn in " + JSON.stringify(md), () => {
