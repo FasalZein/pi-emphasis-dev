@@ -484,22 +484,26 @@ function boldPlans(lines: string[], read: ReadLine[]): (LinePlan | undefined)[] 
 		}
 		// The first sign that may open pending math, outside literal ranges: spans that reach it are not drawn.
 		let math = text.length;
-		for (const m of text.matchAll(MATH_SIGN)) {
+		if (text.includes("$") || text.includes("\\")) for (const m of text.matchAll(MATH_SIGN)) {
 			if (literal.some(([s, e]) => s <= m.index && m.index < e) || !UNESCAPED_AT(text, m.index)) continue;
 			math = m.index;
 			break;
 		}
 		// The marker starts the drawing visits on each line (drawProse matches INLINE in each prose part): a planned
 		// delimiter inside a pill or literal range would never be drawn.
-		const visited = lines.slice(i, j).map((line, k) => {
-			const set = new Set<number>();
+		// Read per line when a span there is about to be planned.
+		const visitedSets: Set<number>[] = [];
+		const visited = (k: number) => {
+			let set = visitedSets[k];
+			if (set) return set;
+			set = visitedSets[k] = new Set<number>();
 			let at = 0;
-			for (const part of partsOf(line, read[i + k].literal)) {
+			for (const part of partsOf(lines[i + k], read[i + k].literal)) {
 				if (!part.literal) for (const m of part.text.matchAll(INLINE)) if (m[2] !== undefined && m[1].length % 2 === 0) set.add(at + m.index + m[1].length);
 				at += part.text.length;
 			}
 			return set;
-		});
+		};
 		// lexInline emits outer pairs before inner ones, with increasing opener offsets.
 		const { pairs, crossesLine } = strongPairs(text, literal);
 		// Lines whose own reading differs from their run's reading: pi may read either, so nothing is drawn there.
@@ -543,7 +547,7 @@ function boldPlans(lines: string[], read: ReadLine[]): (LinePlan | undefined)[] 
 			const lo = lineOf(o);
 			const lc = lineOf(c);
 			if (unsure.has(lo) || unsure.has(lc)) continue;
-			if (!visited[lo].has(o - starts[lo]) || !visited[lc].has(c - starts[lc])) continue;
+			if (!visited(lo).has(o - starts[lo]) || !visited(lc).has(c - starts[lc])) continue;
 			if (lo !== lc) {
 				// The color ends at each line end and starts again after the next line's indent: the characters
 				// there keep their class only when they are plain.
