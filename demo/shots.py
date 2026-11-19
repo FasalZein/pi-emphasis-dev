@@ -121,5 +121,5 @@ body{{margin:0;background:{BG}}} pre{{display:inline-block;margin:0;padding:22px
 if __name__ == "__main__":
     deploy = "The staging deploy for checkout failed again. What happened?"
     shot("reply", deploy, "deploy-reply.md")
-    shot("without", deploy, "deploy-reply.md", extension=False)
+    shot("without", deploy, "without-reply.md", extension=False)
     shot("vocabulary", "Show me every pill.", "every-pill.md")

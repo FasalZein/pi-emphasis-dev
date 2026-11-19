@@ -15,9 +15,9 @@ Replies you can scan. This [Pi](https://pi.dev/) extension turns `[[Done]]`, `[[
 
 ![A Pi reply about a failed deploy, with colored pills, icons and labels](screenshots/reply.png)
 
-The reply above is an invented example about an imagined deploy. This is the same reply without the extension:
+The reply above is an invented example about an imagined deploy. This is the same answer as a model writes it without the extension, with no rules and no drawing:
 
-![The same reply as plain Markdown, with the pills shown as bracketed words](screenshots/without.png)
+![The same answer as a model writes it without the extension: longer plain Markdown paragraphs, two headings and a bullet list, with no pills](screenshots/without.png)
 
 It changes only what is drawn. Stored messages, copied text and HTML exports keep the original Markdown. It makes no extra model call. The `reply_style` prompt section does add input tokens to each model request in the terminal interface: see [The rules come with it](#the-rules-come-with-it).
 
