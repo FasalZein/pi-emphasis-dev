@@ -241,17 +241,21 @@ function labelsOf(lines: string[]): Map<string, number[]> {
 		}
 		const open = line.match(LABEL_OPEN);
 		if (!open) continue;
-		// marked's label may hold line breaks, within the definition's paragraph (here up to 8 lines, as the reader).
+		// marked's label may hold line breaks, blank lines too (here up to 8 lines, as the reader). The next lines
+		// count with their container markers (a top-level definition) and without (one in a container).
 		let label = open[1];
-		for (let k = i + 1; k < lines.length && k <= i + 8 && lines[k].trim(); k++) {
+		let raw = open[1];
+		for (let k = i + 1; k < lines.length && k <= i + 8; k++) {
 			const next = lines[k].replace(CONTAINER_PREFIX, "");
 			const tail = next.match(LABEL_TAIL);
 			if (tail) {
 				add(label + "\n" + tail[0].slice(0, -2), i);
+				add(raw + "\n" + lines[k].match(LABEL_TAIL)?.[0].slice(0, -2), i);
 				break;
 			}
 			if (hasBareBracket(next)) break;
 			label += "\n" + next;
+			raw += "\n" + lines[k];
 		}
 	}
 	return labels;
@@ -905,6 +909,12 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 			let joined = content;
 			let k = i + 1;
 			for (; k < lines.length && k <= i + 8; k++) {
+				// A top-level definition is marked's rule over the raw lines: its label may hold any line, a blank
+				// one too, up to its "]".
+				if (depth === 0 && !marker && labelEnd(joined, 1) < 0 && !hasBareBracket(joined.slice(1))) {
+					joined += "\n" + lines[k].replace(/\t/g, "   ");
+					continue;
+				}
 				const next = blockOf(lines[k]);
 				if (!next.body.trim() || next.depth !== depth) break;
 				joined += "\n" + next.body;

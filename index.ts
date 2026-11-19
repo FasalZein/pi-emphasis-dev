@@ -536,6 +536,8 @@ function boldPlans(lines: string[], read: ReadLine[]): (LinePlan | undefined)[] 
 			if ("*_~".includes(innerFirst) || "*_~".includes(innerLast)) continue;
 			// An escape's "[" with a later "](" makes a link; text with a URL or email may take an escape into its target.
 			if (c + 2 > math || text.includes("](", o) || LINK_TEXT.test(text.slice(o + 2, c))) continue;
+			// Right after a bare URL (cut by pi at CJK punctuation) the escape would join the URL's target.
+			if (literal.some(([s, e]) => e === o && LINK_TEXT.test(text.slice(s, e)))) continue;
 			const run = d + d;
 			const before = charBefore(text, o);
 			const after = charAt(text, c + 2);
