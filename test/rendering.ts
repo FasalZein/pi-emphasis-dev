@@ -82,6 +82,8 @@ export const REVIEW = [
 	"**ftp://example.org/x**",
 	"**see https://example.org** then prose",
 	"**a\nwww.example.org** end",
+	"**see https://example.org\nmore** end",
+	"**mail x@y.org\nmore** end",
 	"**start `code`_italic_ tail**",
 	"**start `code`__deep__ tail**",
 	"**a <https://example.org>_x_ b**",
