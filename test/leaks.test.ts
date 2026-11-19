@@ -2,8 +2,8 @@
 // connector keeps the terminal attributes pi gives it without the extension. The rows come from pi's own
 // assistant-message component (pi applies quote, table-header and bold styles around the transformed text), with a
 // real system theme for a terminal that reported no colors and pi's bundled dark theme in 256 colors. The oracle is
-// the attributes of the same word in the drawing of the reply without the decoration (`bare`): pi's own style, plus
-// the bold color inside a bold span.
+// pi alone: the attributes of the same word in pi's rendering of the same reply without the extension, with the
+// foreground of the configured bold color (the theme's mdLink token) where pi draws the word bold inside a bold span.
 import { describe, expect, test } from "bun:test";
 import { load } from "./seam.ts";
 
@@ -93,46 +93,71 @@ function wordAttributes(rows: string[], word: string): Attributes {
 	throw new Error("no " + JSON.stringify(word) + " in " + JSON.stringify(rows));
 }
 
-const render = (theme: unknown, md: string, emphasis?: unknown) => {
+const render = (theme: unknown, md: string, emphasis?: unknown, width = 100) => {
 	setThemeInstance(theme);
 	const ext = load(theme, emphasis);
 	const transformer = (text: string, context: { messageType: string; isStreaming?: boolean }) => ext.draw(text, context.isStreaming === true, context.messageType);
 	const host = (transformers: unknown[]) =>
-		new AssistantMessageComponent({ role: "assistant", content: [{ type: "text", text: md }] }, false, undefined, "Thinking...", 1, transformers).render(100) as string[];
+		new AssistantMessageComponent({ role: "assistant", content: [{ type: "text", text: md }] }, false, undefined, "Thinking...", 1, transformers).render(width) as string[];
 	return { plain: host([]), drawn: host([transformer]) };
 };
+/** The foreground a theme escape sets, in the form attributesAt reports. */
+const foregroundOf = (escape: string) => attributesAt(escape + "x", 0)!.fg;
 
-/** The word after the decoration keeps the attributes it has without the decoration; the decoration is drawn. */
-const CASES: { name: string; md: string; bare: string; word: string; emphasis?: unknown }[] = [
-	{ name: "faint solid cap, round edges", md: "[[Needs you]] tail", bare: "tail", word: "tail", emphasis: { colors: { ask: "dim" } } },
-	{ name: "faint solid cap, half edges", md: "[[Needs you]] tail", bare: "tail", word: "tail", emphasis: { edges: "half", colors: { ask: "dim" } } },
-	{ name: "faint solid cap inside bold", md: "**a [[Needs you]] b c**", bare: "**a b c**", word: "b c", emphasis: { colors: { ask: "dim" } } },
-	{ name: "tree connector inside bold", md: "**a ├── b c**", bare: "**a b c**", word: "b c" },
-	{ name: "check glyph in a quote", md: "> before ✓ tail", bare: "> before tail", word: "tail" },
-	{ name: "arrow and cross in a quote list", md: "> - before → x ✗ tail", bare: "> - before x tail", word: "tail" },
-	{ name: "pill in a quote", md: "> before [[Done]] tail", bare: "> before tail", word: "tail" },
-	{ name: "faint cap in a quote", md: "> before [[Needs you]] tail", bare: "> before tail", word: "tail", emphasis: { colors: { ask: "dim" } } },
-	{ name: "glyph in bold in a quote", md: "> **a ├── b c** d", bare: "> **a b c** d", word: "b c" },
-	{ name: "pill in a table header", md: "| [[Done]] head | b |\n|---|---|\n| c | d |", bare: "| head | b |\n|---|---|\n| c | d |", word: "head" },
-	{ name: "connector in a table header", md: "| a ├── head | b |\n|---|---|\n| c | d |", bare: "| a head | b |\n|---|---|\n| c | d |", word: "head" },
-	{ name: "pill in a quoted table header", md: "> | [[Done]] head | b |\n> |---|---|\n> | c | d |", bare: "> | head | b |\n> |---|---|\n> | c | d |", word: "head" },
+/** The word after the decoration keeps pi's attributes; the decoration is drawn. `bold`: the word is in a bold span. */
+const CASES: { name: string; md: string; word: string; bold?: boolean; emphasis?: unknown }[] = [
+	{ name: "faint solid cap, round edges", md: "[[Needs you]] tail", word: "tail", emphasis: { colors: { ask: "dim" } } },
+	{ name: "faint solid cap, half edges", md: "[[Needs you]] tail", word: "tail", emphasis: { edges: "half", colors: { ask: "dim" } } },
+	{ name: "faint solid cap inside bold", md: "**a [[Needs you]] b c**", word: "b c", bold: true, emphasis: { colors: { ask: "dim" } } },
+	{ name: "tree connector inside bold", md: "**a ├── b c**", word: "b c", bold: true },
+	{ name: "check glyph in a quote", md: "> before ✓ tail", word: "tail" },
+	{ name: "arrow and cross in a quote list", md: "> - before → x ✗ tail", word: "tail" },
+	{ name: "pill in a quote", md: "> before [[Done]] tail", word: "tail" },
+	{ name: "faint cap in a quote", md: "> before [[Needs you]] tail", word: "tail", emphasis: { colors: { ask: "dim" } } },
+	{ name: "glyph in bold in a quote", md: "> **a ├── b c** d", word: "b c", bold: true },
 ];
 
 describe("the word after a decoration keeps pi's attributes (pi-tui rendered rows)", () => {
 	for (const [themeName, make] of THEMES) {
 		for (const c of CASES) {
 			test(themeName + ": " + c.name + ": " + JSON.stringify(c.md), () => {
-				const theme = make();
+				const theme = make() as { getFgAnsi(name: string): string };
 				const { plain, drawn } = render(theme, c.md, c.emphasis);
 				expect(drawn).not.toEqual(plain);
-				expect(wordAttributes(drawn, c.word)).toEqual(wordAttributes(render(theme, c.bare, c.emphasis).drawn, c.word));
+				const expected = wordAttributes(plain, c.word);
+				if (c.bold) {
+					expect(expected.bold).toBe(true);
+					expected.fg = foregroundOf(theme.getFgAnsi("mdLink"));
+				}
+				expect(wordAttributes(drawn, c.word)).toEqual(expected);
 			});
 		}
 	}
-	test("a pill in a table body row, a quote's lazy line and a paragraph after a table draw as before", () => {
-		// Guard cases: no enclosing style, so nothing is restored after the decoration.
+});
+
+// Rows that are no table header for pi, or a header pi prints raw because the pane is narrow: the word after the pill
+// is not bold in pi alone, and the drawing must not make it bold.
+const NOT_HEADER: { name: string; md: string; widths: number[] }[] = [
+	{ name: "a quoted delimiter-like line after a paragraph", md: "[[Done]] Q | y\n> --- | ---", widths: [100, 24] },
+	{ name: "separate list items", md: "- [[Done]] Q | y\n- --- | ---", widths: [100, 24] },
+	{ name: "a table body row before a delimiter-like body row", md: "| a | b |\n|---|---|\n| [[Done]] Q | y |\n| --- | --- |", widths: [100, 24] },
+	{ name: "a six-column header in a narrow pane (pi prints the table raw)", md: "| [[Done]] Q | b | c | d | e | f |\n|---|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | 5 | 6 |", widths: [24] },
+];
+describe("the word after a pill keeps pi's attributes where pi draws no table-header bold", () => {
+	for (const [themeName, make] of THEMES) {
+		for (const c of NOT_HEADER) {
+			for (const width of c.widths) {
+				test(themeName + ", width " + width + ": " + c.name + ": " + JSON.stringify(c.md), () => {
+					const { plain, drawn } = render(make(), c.md, undefined, width);
+					expect(drawn).not.toEqual(plain);
+					expect(wordAttributes(drawn, "Q")).toEqual(wordAttributes(plain, "Q"));
+				});
+			}
+		}
+	}
+	test("a pill in a table body row and a paragraph after a table draw as before", () => {
 		const theme = THEMES[2][1]();
-		for (const [md, word] of [["| a | b |\n|---|---|\n| [[Done]] c | d |", "c"], ["| a | b |\n\n[[Done]] tail", "tail"], ["a\n> b\n\n[[Done]] ✓ tail", "tail"]]) {
+		for (const [md, word] of [["| a | b |\n|---|---|\n| [[Done]] c | d |", "c"], ["| a | b |\n\n[[Done]] tail", "tail"]]) {
 			const { plain, drawn } = render(theme, md);
 			expect(wordAttributes(drawn, word)).toEqual(wordAttributes(plain, word));
 		}

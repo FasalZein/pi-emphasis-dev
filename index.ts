@@ -593,8 +593,7 @@ function draw(lines: string[], palette: Palette): Drawing {
 		if (kind === "heading") return drawHeading(line, literal);
 		if (kind !== "prose") return line;
 		if (literal.length === 0 && PILLS_ONLY.test(line)) scoreboard = true;
-		const frame = quoted(line) ? (tableHeader(line, lines[i + 1]) ? QUOTED_HEADER : QUOTE) : tableHeader(line, lines[i + 1]) ? HEADER : NO_FRAME;
-		return drawProse(line, literal, palette, open, close, pills, plans[i], frame);
+		return drawProse(line, literal, palette, open, close, pills, plans[i], quoted(line));
 	});
 	return { lines: out, pills, scoreboard, read, boundary, pillsAtBoundary, scoreboardAtBoundary, end };
 }
@@ -927,9 +926,8 @@ function drawPill(label: string, palette: Palette): string {
 	const { icon, word } = splitLabel(label, palette.icons);
 	const shown = (icon && word ? word : word || label.trim()).replace(CURRENCY, (_, before: string) => before + "\\$").replace(/ /g, NBSP);
 	const text = icon && word ? icon + ICON_SPACE + shown : shown;
-	const { edges } = palette;
-	const [left, right] = style.cap ? EDGE_GLYPHS[edges] : ["", ""];
-	const pad = style.cap && edges === "sharp" ? NBSP : "";
+	const [left, right] = style.cap ? EDGE_GLYPHS[palette.edges] : ["", ""];
+	const pad = style.cap && palette.edges === "sharp" ? NBSP : "";
 	// A cap's escape may open faint text (a faint theme color): the cap closes it with the foreground.
 	const capEnd = resetsWeight(style.cap) === false ? "\x1b[22;39m" : "\x1b[39m";
 	const capL = left ? `${style.cap}${left}${capEnd}` : "";
@@ -979,38 +977,31 @@ const DELIMITER_IN = /[*_~]/;
 /** A character that may be part of an email address's local part (marked's GFM email rule). */
 const EMAIL_CHAR = /[A-Za-z0-9._+-]/;
 
-/**
- * The styles pi draws around a prose line's text that a pill or glyph's closing escapes end: a block quote's
- * color, and a table header's bold. A line takes the quote color when it opens with ">" after list markers and no
- * list marker follows (pi's list bullet ends the quote color on its line). A quote's lazy continuation line (no
- * ">") is not recognized and keeps the reset.
- */
-interface Frame {
-	quote: boolean;
-	header: boolean;
-}
-const NO_FRAME: Frame = { quote: false, header: false };
-const QUOTE: Frame = { quote: true, header: false };
-const HEADER: Frame = { quote: false, header: true };
-const QUOTED_HEADER: Frame = { quote: true, header: true };
-const QUOTE_MARKERS = /^(?: {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+)*(?: {0,3}>[ \t]?)+/;
+const LIST_PREFIX = / {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+/y;
+const QUOTE_PREFIX = / {0,3}>[ \t]?/y;
 const LIST_START = /^[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/;
-const quoted = (line: string) => {
-	const markers = QUOTE_MARKERS.exec(line);
-	return markers !== null && !LIST_START.test(line.slice(markers[0].length));
+/** The end of a prefix that re (sticky) matches at index at of line, -1 for none. */
+const prefixEnd = (re: RegExp, line: string, at: number) => {
+	re.lastIndex = at;
+	return re.test(line) ? re.lastIndex : -1;
 };
-/** A table row's cells after its quote and list markers: GFM splits at each unescaped "|" outside the outer pipes. */
-const cellCount = (row: string) =>
-	row
-		.replace(/^[ \t>]*(?:(?:[-*+]|\d+[.)])[ \t]+)*/, "")
-		.trim()
-		.replace(/^\|/, "")
-		.replace(/(?<!\\)\|$/, "")
-		.split(/(?<!\\)\|/).length;
-/** Whether line is a GFM table's header row: the next line is a delimiter row with as many cells. */
-const tableHeader = (line: string, next: string | undefined) =>
-	next !== undefined && line.includes("|") && next.includes("-") && TABLE_DELIMITER.test(next) && cellCount(line) === cellCount(next);
-
+/**
+ * Whether pi draws a prose line in a block quote's color, which a pill or glyph's closing escapes end: the line
+ * opens with ">" after list markers and no list marker follows (pi's list bullet ends the quote color on its line).
+ * Each prefix is consumed once, so the cost is linear in the line. A quote's lazy continuation line (no ">") is
+ * not recognized and keeps the reset.
+ */
+function quoted(line: string): boolean {
+	let at = 0;
+	let next: number;
+	while ((next = prefixEnd(LIST_PREFIX, line, at)) >= 0) at = next;
+	let quote = false;
+	while ((next = prefixEnd(QUOTE_PREFIX, line, at)) >= 0) {
+		at = next;
+		quote = true;
+	}
+	return quote && !LIST_START.test(line.slice(at));
+}
 /**
  * Whether escapes end with intensity reset (SGR 22 or 0: true), set (SGR 1 or 2: false) or untouched (undefined).
  * The color parameters of SGR 38, 48 and 58 are skipped.
@@ -1036,7 +1027,7 @@ const glyphResets = (color: Colorize) => {
 	return reset;
 };
 
-function drawProse(line: string, literal: Range[], palette: Palette, open: string, close: string, drawn?: string[], plan?: LinePlan, frame = NO_FRAME): string {
+function drawProse(line: string, literal: Range[], palette: Palette, open: string, close: string, drawn?: string[], plan?: LinePlan, inQuote = false): string {
 	if (!plan?.continued && !PROSE_MARKS.test(line)) return line;
 	const marks = plan?.marks;
 	const parts = partsOf(line, literal);
@@ -1056,9 +1047,10 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
 	}
 	let result = "";
 	let inBold = plan?.continued === true;
-	// After a pill or glyph, the styles its closing escapes ended: the quote color, the bold weight of a bold span or
-	// table header (after an intensity reset), and the bold color.
-	const restore = (weightReset: boolean) => (frame.quote ? palette.quote : "") + (weightReset && (inBold || frame.header) ? "\x1b[1m" : "") + (inBold ? open : "");
+	// After a pill or glyph, the styles its closing escapes ended: the quote color, the bold weight of a bold span
+	// (after an intensity reset), and the bold color. A table header's bold is not restored: pi prints a table raw
+	// when the pane is narrow, and the drawing cannot know the width.
+	const restore = (weightReset: boolean) => (inQuote ? palette.quote : "") + (weightReset && inBold ? "\x1b[1m" : "") + (inBold ? open : "");
 	const glyph = (m: string, color: Colorize) => color(m) + restore(glyphResets(color));
 	// The start in the line of each part.
 	let at = 0;
