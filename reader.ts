@@ -1671,11 +1671,19 @@ export function strongPairs(text: string, literal: Range[]): { pairs: StrongPair
 	const simple = simplePairs(text, literal);
 	if (simple) return simple;
 	const read: Lexed = { pairs: [], crossesLine: false, links: text.includes("](") };
-	// The start of the last URL_SIGN match (every match, overlapping ones too), -1 for none.
-	let slowUntil = -1;
+	// The slow window: from the start of the word that holds the first URL_SIGN match to the start of the last one
+	// (every match, overlapping ones too); empty (from > until) for none.
+	const slow: Slow = { from: 0, until: -1 };
 	URL_SIGNS.lastIndex = 0;
-	for (let m: RegExpExecArray | null; (m = URL_SIGNS.exec(text)) !== null; URL_SIGNS.lastIndex = m.index + 1) slowUntil = m.index;
-	lexInline(text, 0, text.length, literal, false, read, slowUntil);
+	for (let m: RegExpExecArray | null; (m = URL_SIGNS.exec(text)) !== null; URL_SIGNS.lastIndex = m.index + 1) {
+		if (slow.until < 0) {
+			let w = m.index;
+			while (w > 0 && !SPACE.test(text[w - 1])) w--;
+			slow.from = w;
+		}
+		slow.until = m.index;
+	}
+	lexInline(text, 0, text.length, literal, false, read, slow);
 	return { pairs: read.pairs, crossesLine: read.crossesLine };
 }
 
@@ -1774,16 +1782,23 @@ const URL_SIGNS = new RegExp(URL_SIGN.source, "g");
 const NEXT_SIGN = /[\\\[!*_~]/g;
 
 /**
- * slowUntil: the start in all of the last URL_SIGN match, -1 for none. From an index after it the text is fast:
- * no bare URL or email token can start there, because each holds its URL_SIGN match after its start. Fast text
- * is read as follows, from the state the slow reading reached at that index. Text tokens then matter only through the character before the next
+ * slow: the window of all where a bare URL or email token may start. A token holds a URL_SIGN match at or after
+ * its start and no white space, so it starts in the word of a match at or before the match: after the last
+ * match and before the word of the first one none can start, and the text there is fast. A fast text token
+ * before the window ends at its start (after white space, as a slow text token may end there too), so the slow
+ * reading begins at the word with the previous character a slow reading would leave. Fast text is read as follows. Text tokens then matter only through the character before the next
  * escape, link, emphasis or strikethrough sign (the previous character pi's emphasis rule reads), so a text
  * token runs to the next such sign or literal range. Other stops of marked's text rule split text tokens
  * without changing that character, and a line break token leaves it whitespace or empty, which the emphasis
  * rule reads alike.
  */
 const NO_EMPHASIS_SIGN = /[^*_]*/y;
-function lexInline(all: string, from: number, to: number, literal: Range[], inLink: boolean, read: Lexed, slowUntil: number): void {
+/** Where strongPairs lexes slowly: from..until in the whole text (empty when from > until). */
+interface Slow {
+	from: number;
+	until: number;
+}
+function lexInline(all: string, from: number, to: number, literal: Range[], inLink: boolean, read: Lexed, slow: Slow): void {
 	// Text without "*" or "_" holds no strong span and no token that could hold one.
 	NO_EMPHASIS_SIGN.lastIndex = from;
 	NO_EMPHASIS_SIGN.exec(all);
@@ -1805,7 +1820,7 @@ function lexInline(all: string, from: number, to: number, literal: Range[], inLi
 			continue;
 		}
 		const c = text[i];
-		const fast = from + i > slowUntil;
+		const fast = from + i > slow.until || from + i < slow.from;
 		if (c === "\\") {
 			ESCAPE.lastIndex = i;
 			if (ESCAPE.test(text)) {
@@ -1821,7 +1836,7 @@ function lexInline(all: string, from: number, to: number, literal: Range[], inLi
 			if (link) {
 				read.crossesLine ||= spans(text, i, i + link[0].length);
 				const start = i + link[0].indexOf("[") + 1;
-				lexInline(all, from + start, from + start + link[1].length, literal, true, read, slowUntil);
+				lexInline(all, from + start, from + start + link[1].length, literal, true, read, slow);
 				i += link[0].length;
 				continue;
 			}
@@ -1838,7 +1853,7 @@ function lexInline(all: string, from: number, to: number, literal: Range[], inLi
 				// A link's text is drawn as written: a color escape there would end the link label.
 				if (token.strong && !inLink) read.pairs.push([from + i, from + token.end - 2]);
 				read.crossesLine ||= spans(text, i, token.end);
-				lexInline(all, from + i + width, from + token.end - width, literal, inLink, read, slowUntil);
+				lexInline(all, from + i + width, from + token.end - width, literal, inLink, read, slow);
 				i = token.end;
 				continue;
 			}
@@ -1848,7 +1863,7 @@ function lexInline(all: string, from: number, to: number, literal: Range[], inLi
 			const del = DEL.exec(text);
 			if (del) {
 				read.crossesLine ||= spans(text, i, i + del[0].length);
-				lexInline(all, from + i + 2, from + i + 2 + del[2].length, literal, inLink, read, slowUntil);
+				lexInline(all, from + i + 2, from + i + 2 + del[2].length, literal, inLink, read, slow);
 				i += del[0].length;
 				continue;
 			}
@@ -1861,6 +1876,8 @@ function lexInline(all: string, from: number, to: number, literal: Range[], inLi
 			if (c === "~") while (text[next] === "~") next++;
 			NEXT_SIGN.lastIndex = next;
 			const sign = NEXT_SIGN.exec(text);
+			// Before the slow window, the token ends at its start.
+			if (from + i < slow.from) end = Math.min(end, slow.from - from);
 			if (sign && sign.index < end) end = sign.index;
 			const last = text[end - 1];
 			i = end;
