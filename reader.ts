@@ -1659,11 +1659,11 @@ export function strongPairs(text: string, literal: Range[]): { pairs: StrongPair
 	return { pairs: read.pairs, crossesLine: read.crossesLine };
 }
 
-/** A sign that fast lexInline reads as a token other than text, "*" emphasis and literal ranges: escape, "_", strikethrough. */
-const NOT_SIMPLE = /[\\_~]/;
+/** A sign that fast lexInline may read as a token other than text, "*" emphasis and literal ranges: escape, "_", strikethrough. */
+const NOT_SIMPLE = /[\\_]|~~/;
 /**
  * strongPairs for simple text, or undefined. Simple: no URL_SIGN, no NOT_SIMPLE sign and no "](" (so "[" is
- * text), every "*" run exactly "**" with ASCII characters (or the text's ends) around it and outside literal
+ * text, and a lone "~" opens no strikethrough), every "*" run exactly "**" with ASCII characters (or the text's ends) around it and outside literal
  * ranges, and every run that the lexer tries as an opener finds its closer. lexInline then reads only "**"
  * tokens, literal ranges and fast text tokens, and emStrongAt reduces to this:
  * - The opener test reads the text (opensLeft is emStrongAt's test for an ASCII previous character). The

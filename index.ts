@@ -502,7 +502,10 @@ function boldPlans(lines: string[], read: ReadLine[]): (LinePlan | undefined)[] 
 			set = visitedSets[k] = new Set<number>();
 			let at = 0;
 			for (const part of partsOf(lines[i + k], read[i + k].literal)) {
-				if (!part.literal) for (const m of part.text.matchAll(INLINE)) if (m[2] !== undefined && m[1].length % 2 === 0) set.add(at + m.index + m[1].length);
+				if (!part.literal) {
+					INLINE.lastIndex = 0;
+					for (let m: RegExpExecArray | null; (m = INLINE.exec(part.text)) !== null; ) if (m[2] !== undefined && m[1].length % 2 === 0) set.add(at + m.index + m[1].length);
+				}
 				at += part.text.length;
 			}
 			return set;
@@ -1070,7 +1073,12 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
 		// The start in the line of each match, when the line draws bold. Without escapes or gaps added, a match's
 		// index in prose is its index in the line, past the lead label's icon; otherwise the matches of the
 		// written part give them in order (the steps before the drawing add no marker, pill or glyph).
-		const starts = marks?.size && prose !== part.text ? [...written[p].matchAll(pattern)].map((m) => partAt + m.index + (m[1] ?? "").length) : undefined;
+		let starts: number[] | undefined;
+		if (marks?.size && prose !== part.text) {
+			starts = [];
+			pattern.lastIndex = 0;
+			for (let m: RegExpExecArray | null; (m = pattern.exec(written[p])) !== null; ) starts.push(partAt + m.index + (m[1] ?? "").length);
+		}
 		const startOf = (index: number, slashes: string | undefined) =>
 			!marks?.size ? undefined : starts ? starts[n] : partAt + index + (slashes ?? "").length - (p === 0 && index >= iconAt + iconLength && iconLength > 0 ? iconLength : 0);
 		let n = 0;
@@ -1120,10 +1128,15 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
 			return match;
 		};
 		// The shorter INLINE is faster where the text holds no glyph; its callback gets only its own groups.
-		let text = glyphs
-			? prose.replace(INLINE_OR_GLYPH, (m: string, s: string | undefined, k: string | undefined, l: string | undefined, ps: string | undefined, f: string | undefined, a: string | undefined, t: string | undefined, index: number) =>
-					each(index, m, s, k, l, ps, f, a, t))
-			: prose.replace(INLINE, (m: string, s: string | undefined, k: string | undefined, l: string | undefined, index: number) => each(index, m, s, k, l));
+		// (An exec loop: the same pieces as prose.replace(pattern, each), with no call from the replace builtin per match.)
+		let text = "";
+		let done = 0;
+		pattern.lastIndex = 0;
+		for (let m: RegExpExecArray | null; (m = pattern.exec(prose)) !== null; ) {
+			text += prose.slice(done, m.index) + (glyphs ? each(m.index, m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7]) : each(m.index, m[0], m[1], m[2], m[3]));
+			done = m.index + m[0].length;
+		}
+		text += prose.slice(done);
 		// A line inside a span an earlier line opened takes the bold color after its indent.
 		if (p === 0 && plan?.continued) {
 			const indent = text.length - text.trimStart().length;
