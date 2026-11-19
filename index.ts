@@ -431,7 +431,8 @@ const BOLD_RUN = /\*\*|__/;
  * the escape on each inner side leaves the run's flanking class as it was (runKind), no delimiter or email
  * sits next to an escape, and the span holds no "](" that the escape's "[" could turn into a link. A span is
  * read over its paragraph: consecutive prose lines that all belong to a top-level paragraph. Other prose lines
- * (lists, quotes) draw a span only when the line alone and its run of prose lines read the same spans there.
+ * (lists, quotes) draw a span only when the line alone and its run of prose lines read the same spans there
+ * (they do when no token of the run spans a line break).
  * Every other run is left as written, so pi shows it as it would without the extension.
  */
 function boldPlans(lines: string[], read: ReadLine[]): (LinePlan | undefined)[] {
@@ -466,10 +467,12 @@ function boldPlans(lines: string[], read: ReadLine[]): (LinePlan | undefined)[] 
 			while (starts[k] > at) k--;
 			return k;
 		};
-		const pairs = strongPairs(text, literal).sort((a, b) => a[0] - b[0]);
+		const { pairs, crossesLine } = strongPairs(text, literal);
+		pairs.sort((a, b) => a[0] - b[0]);
 		// Lines whose own reading differs from their run's reading: pi may read either, so nothing is drawn there.
 		const unsure = new Set<number>();
-		if (!paragraph && j - i > 1) {
+		// Without a token across a line break, each line reads alone as it reads in its run.
+		if (!paragraph && j - i > 1 && crossesLine) {
 			const inRun = new Map<number, string[]>();
 			for (const [o, c] of pairs) {
 				const lo = lineOf(o);
@@ -481,7 +484,7 @@ function boldPlans(lines: string[], read: ReadLine[]): (LinePlan | undefined)[] 
 			}
 			for (let k = 0; k < j - i; k++) {
 				if (!BOLD_RUN.test(lines[i + k])) continue;
-				const own = strongPairs(lines[i + k], read[i + k].literal).sort((a, b) => a[0] - b[0]).map(([o, c]) => o + ":" + c).join(" ");
+				const own = strongPairs(lines[i + k], read[i + k].literal).pairs.sort((a, b) => a[0] - b[0]).map(([o, c]) => o + ":" + c).join(" ");
 				if (own !== (inRun.get(k) ?? []).join(" ")) unsure.add(k);
 			}
 		}

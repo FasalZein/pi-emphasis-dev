@@ -978,6 +978,12 @@ const R_DELIM_UND = new RegExp(
 	`^[^_*]*?\\*\\*[^_*]*?_[^_*]*?(?=\\*\\*)|[^_]+(?=[^_])|(?!_)${PUNCT_CJK_UND}(_+)(?=[\\s]|$)|${NOT_PUNCT_SPACE_CJK_UND}(_+)(?!_)(?=${PUNCT_SPACE_CJK_UND}|$)|(?!_)${PUNCT_SPACE_CJK_UND}(_+)(?=${NOT_PUNCT_SPACE_CJK_UND})|[\\s](_+)(?!_)(?=${PUNCT_CJK_UND})|(?!_)${PUNCT_CJK_UND}(_+)(?!_)(?=${PUNCT_CJK_UND})`,
 	"gu",
 );
+// The scans without their first alternative, which matches only at the start of the scanned text: read on the
+// whole masked text from an index when that alternative does not match there (no slice per opener).
+const FIRST_AST = /[^_*]*?__[^_*]*?\*[^_*]*?(?=__)/y;
+const FIRST_UND = /[^_*]*?\*\*[^_*]*?_[^_*]*?(?=\*\*)/y;
+const R_DELIM_AST_REST = new RegExp(R_DELIM_AST.source.slice(R_DELIM_AST.source.indexOf("|") + 1), "gu");
+const R_DELIM_UND_REST = new RegExp(R_DELIM_UND.source.slice(R_DELIM_UND.source.indexOf("|") + 1), "gu");
 /** marked's gfm emStrongLDelim, punctuation and unicodeAlphaNumeric rules, sticky instead of anchored. */
 const L_DELIM = /(?:\*+(?:((?!\*)(?!~)[\p{P}\p{S}])|([^\s*]))?)|_+(?:((?!_)(?!~)[\p{P}\p{S}])|([^\s_]))?/uy;
 const PUNCTUATION_BEFORE = /^((?![*_])[\s\p{P}\p{S}])/u;
@@ -985,6 +991,8 @@ const ALPHANUMERIC = /[\p{L}\p{N}]/u;
 const ESCAPE = /\\([!"#$%&'()*+,\-./:;<=>?@\[\]\\^_\x60{|}~])/y;
 const ANY_PUNCTUATION = /\\[\p{P}\p{S}]/gu;
 /** marked's blockSkip: inline links, code spans and HTML tags, masked so that no delimiter inside them pairs. */
+/** Signs without which BLOCK_SKIP masks nothing. */
+const MAY_SKIP = /\]\(|\x60|</;
 const BLOCK_SKIP = /\[(?:[^\[\]\x60]|(?<a>\x60+)[^\x60]+\k<a>(?!\x60))*?\]\((?:\\[\s\S]|[^\\\(\)]|\((?:\\[\s\S]|[^\\\(\)])*\))*\)|(?<!\x60)()(?<b>\x60+)[^\x60]+\k<b>(?!\x60)|<(?! )[^<>]*?>/g;
 const LINK_LABEL = String.raw`(?:\[(?:\\[\s\S]|[^\[\]\\])*\]|\\[\s\S]|\x60+(?!\x60)[^\x60]*?\x60+(?!\x60)|\x60\x60+(?=\])|[^\[\]\\\x60])*?`;
 const LINK = new RegExp(
@@ -999,7 +1007,7 @@ const BR = /( {2,}|\\)\n(?!\s*$)/y;
 const GFM_URL = /((?:[hH][tT][tT][pP][sS]?|[fF][tT][pP]):\/\/|www\.)(?:[a-zA-Z0-9\-]+\.?)+[^\s<]*|[A-Za-z0-9._+-]+(@)[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![-_])/y;
 const BACKPEDAL = /^(?:[^?!.,:;*_'"~()&]+|\([^)]*\)|&(?![a-zA-Z0-9]+;$)|[?!.,:;*_'"~)]+(?!$))+/;
 // marked's gfm inlineText rule. "protocol" is not grouped there, so text stops before any "http" or "ftp".
-const TEXT = /^(\x60+|~+|[^\x60~])(?:(?=[\x60~])|(?= {2,}\n)|(?=[a-zA-Z0-9.!#$%&'*+\/=?_\x60{\|}~-]+@)|[\s\S]*?(?:(?=[\\<!\[\x60*~_]|\b_|[hH][tT][tT][pP][sS]?|[fF][tT][pP]:\/\/|www\.|$)|[^ ](?= {2,}\n)|[^a-zA-Z0-9.!#$%&'*+\/=?_\x60{\|}~-](?=[a-zA-Z0-9.!#$%&'*+\/=?_\x60{\|}~-]+@)))/;
+const TEXT = /(\x60+|~+|[^\x60~])(?:(?=[\x60~])|(?= {2,}\n)|(?=[a-zA-Z0-9.!#$%&'*+\/=?_\x60{\|}~-]+@)|[\s\S]*?(?:(?=[\\<!\[\x60*~_]|\b_|[hH][tT][tT][pP][sS]?|[fF][tT][pP]:\/\/|www\.|$)|[^ ](?= {2,}\n)|[^a-zA-Z0-9.!#$%&'*+\/=?_\x60{\|}~-](?=[a-zA-Z0-9.!#$%&'*+\/=?_\x60{\|}~-]+@)))/y;
 /** Where pi's inline math extension may start (its startInline): text stops before it. */
 const MATH_START = /\$|\\[(\[]/g;
 
@@ -1033,9 +1041,20 @@ function emStrongAt(text: string, masked: string, at: number, prev: string): { e
 	let delimTotal = lLength;
 	let midDelimTotal = 0;
 	const sameBefore = prev === match[0][0];
-	const endReg = match[0][0] === "*" ? R_DELIM_AST : R_DELIM_UND;
-	endReg.lastIndex = 0;
-	const clipped = masked.slice(at + lLength);
+	const ast = match[0][0] === "*";
+	const first = ast ? FIRST_AST : FIRST_UND;
+	first.lastIndex = at + lLength;
+	// clipped starts at offset in masked.
+	let clipped = masked;
+	let offset = at + lLength;
+	let endReg = ast ? R_DELIM_AST_REST : R_DELIM_UND_REST;
+	endReg.lastIndex = offset;
+	if (first.test(masked)) {
+		clipped = masked.slice(offset);
+		offset = 0;
+		endReg = ast ? R_DELIM_AST : R_DELIM_UND;
+		endReg.lastIndex = 0;
+	}
 	let r: RegExpExecArray | null;
 	while ((r = endReg.exec(clipped)) !== null) {
 		const delim = r[1] || r[2] || r[3] || r[4] || r[5] || r[6];
@@ -1064,7 +1083,7 @@ function emStrongAt(text: string, masked: string, at: number, prev: string): { e
 		if (delimTotal > 0) continue;
 		rLength = Math.min(rLength, rLength + delimTotal + midDelimTotal);
 		const lastCharLength = r[0].codePointAt(0)! > 65535 ? 2 : 1;
-		return { end: at + lLength + r.index + lastCharLength + rLength, strong: Math.min(lLength, rLength) % 2 === 0 };
+		return { end: at + lLength + (r.index - offset) + lastCharLength + rLength, strong: Math.min(lLength, rLength) % 2 === 0 };
 	}
 	return undefined;
 }
@@ -1073,18 +1092,42 @@ function emStrongAt(text: string, masked: string, at: number, prev: string): { e
  * The strong spans pi's parser makes in inline text (a paragraph's lines joined with "\n"), at every nesting
  * level. literal: the reader's literal ranges in text coordinates, sorted.
  */
-export function strongPairs(text: string, literal: Range[]): StrongPair[] {
-	const pairs: StrongPair[] = [];
-	lexInline(text, 0, text.length, literal, false, pairs);
-	return pairs;
+export function strongPairs(text: string, literal: Range[]): { pairs: StrongPair[]; crossesLine: boolean } {
+	const read: Lexed = { pairs: [], crossesLine: false, links: text.includes("](") };
+	lexInline(text, 0, text.length, literal, false, read, !URL_SIGN.test(text));
+	return { pairs: read.pairs, crossesLine: read.crossesLine };
 }
 
-function lexInline(all: string, from: number, to: number, literal: Range[], inLink: boolean, pairs: StrongPair[]): void {
+/** What lexInline reads: the strong pairs; whether a link, emphasis or strikethrough token spans a line break. */
+interface Lexed {
+	pairs: StrongPair[];
+	crossesLine: boolean;
+	/** The text holds "](": only then may a "[" open an inline link. */
+	links: boolean;
+}
+const spans = (text: string, start: number, end: number) => text.slice(start, end).includes("\n");
+
+/** Text where a bare URL or email may start: only there do text tokens end at places other than NEXT_SIGN. */
+const URL_SIGN = /@|:\/\/|www\./;
+/** The characters where a token other than text may start, without URLs: escape, link, emphasis, strikethrough. */
+const NEXT_SIGN = /[\\\[!*_~]/g;
+
+/**
+ * fast: the text holds no URL_SIGN. Text tokens then matter only through the character before the next
+ * escape, link, emphasis or strikethrough sign (the previous character pi's emphasis rule reads), so a text
+ * token runs to the next such sign or literal range. Other stops of marked's text rule split text tokens
+ * without changing that character, and a line break token leaves it whitespace or empty, which the emphasis
+ * rule reads alike.
+ */
+function lexInline(all: string, from: number, to: number, literal: Range[], inLink: boolean, read: Lexed, fast: boolean): void {
 	const text = all.slice(from, to);
-	const masked = text.replace(ANY_PUNCTUATION, (s) => "+".repeat(s.length)).replace(BLOCK_SKIP, (s) => "[" + "a".repeat(s.length - 2) + "]");
+	let masked = text.includes("\\") ? text.replace(ANY_PUNCTUATION, (s) => "+".repeat(s.length)) : text;
+	if (MAY_SKIP.test(masked)) masked = masked.replace(BLOCK_SKIP, (s) => "[" + "a".repeat(s.length - 2) + "]");
 	let r = 0;
 	let prev = "";
 	let lastText = false;
+	// The next possible math start after the current index, -1 for none left.
+	let math = -2;
 	for (let i = 0; i < text.length; ) {
 		if (!lastText) prev = "";
 		lastText = false;
@@ -1101,12 +1144,15 @@ function lexInline(all: string, from: number, to: number, literal: Range[], inLi
 				continue;
 			}
 		}
-		if (c === "[" || (c === "!" && text[i + 1] === "[")) {
+		// In fast text an undefined reference reads like text: its "[" token leaves an empty previous character,
+		// which the emphasis rule reads like the punctuation "[".
+		if ((c === "[" || (c === "!" && text[i + 1] === "[")) && (read.links || !fast)) {
 			LINK.lastIndex = i;
-			const link = LINK.exec(text);
+			const link = read.links ? LINK.exec(text) : null;
 			if (link) {
+				read.crossesLine ||= spans(text, i, i + link[0].length);
 				const start = i + link[0].indexOf("[") + 1;
-				lexInline(all, from + start, from + start + link[1].length, literal, true, pairs);
+				lexInline(all, from + start, from + start + link[1].length, literal, true, read, fast);
 				i += link[0].length;
 				continue;
 			}
@@ -1121,8 +1167,9 @@ function lexInline(all: string, from: number, to: number, literal: Range[], inLi
 			if (token) {
 				const width = token.strong ? 2 : 1;
 				// A link's text is drawn as written: a color escape there would end the link label.
-				if (token.strong && !inLink) pairs.push([from + i, from + token.end - 2]);
-				lexInline(all, from + i + width, from + token.end - width, literal, inLink, pairs);
+				if (token.strong && !inLink) read.pairs.push([from + i, from + token.end - 2]);
+				read.crossesLine ||= spans(text, i, token.end);
+				lexInline(all, from + i + width, from + token.end - width, literal, inLink, read, fast);
 				i = token.end;
 				continue;
 			}
@@ -1131,10 +1178,23 @@ function lexInline(all: string, from: number, to: number, literal: Range[], inLi
 			DEL.lastIndex = i;
 			const del = DEL.exec(text);
 			if (del) {
-				lexInline(all, from + i + 2, from + i + 2 + del[2].length, literal, inLink, pairs);
+				read.crossesLine ||= spans(text, i, i + del[0].length);
+				lexInline(all, from + i + 2, from + i + 2 + del[2].length, literal, inLink, read, fast);
 				i += del[0].length;
 				continue;
 			}
+		}
+		if (fast) {
+			let end = text.length;
+			if (r < literal.length) end = Math.min(end, literal[r][0] - from);
+			NEXT_SIGN.lastIndex = i + 1;
+			const sign = NEXT_SIGN.exec(text);
+			if (sign && sign.index < end) end = sign.index;
+			const last = text[end - 1];
+			i = end;
+			if (last !== "_") prev = last;
+			lastText = true;
+			continue;
 		}
 		if (c === " " || c === "\\") {
 			BR.lastIndex = i;
@@ -1164,13 +1224,19 @@ function lexInline(all: string, from: number, to: number, literal: Range[], inLi
 		}
 		// The text token stops before a possible math start (pi's startInline) and before a literal range.
 		let cut = r < literal.length ? Math.min(text.length, literal[r][0] - from) : text.length;
-		MATH_START.lastIndex = i + 1;
-		const math = MATH_START.exec(text);
-		if (math && math.index < cut) cut = math.index;
-		const piece = TEXT.exec(text.slice(i, cut));
-		const raw = piece ? piece[0] : text[i];
-		i += Math.max(1, raw.length);
-		if (!raw.endsWith("_")) prev = raw.slice(-1);
+		if (math !== -1 && math < i + 1) {
+			MATH_START.lastIndex = i + 1;
+			math = MATH_START.exec(text)?.index ?? -1;
+		}
+		if (math >= 0 && math < cut) cut = math;
+		// The rule read on the whole text ends at its first stop; marked reads it on the text up to the cut, where
+		// its "$" ends it: the end is the earlier of the two.
+		TEXT.lastIndex = i;
+		const piece = TEXT.exec(text);
+		const end = Math.max(i + 1, Math.min(cut, piece ? i + piece[0].length : i + 1));
+		const last = text[end - 1];
+		i = end;
+		if (last !== "_") prev = last;
 		lastText = true;
 	}
 }
@@ -1181,7 +1247,18 @@ function lexInline(all: string, from: number, to: number, literal: Range[], inLi
  * left-only, right-only or both-flanking delimiter (next to CJK text: both), or not at all ("" before it: the
  * scan starts at the run).
  */
+const runKinds = new Map<string, "left" | "right" | "both" | "none">();
 export function runKind(before: string, run: string, after: string): "left" | "right" | "both" | "none" {
+	const key = before + run + after;
+	let kind = runKinds.get(key);
+	if (kind === undefined) {
+		// Keys are at most two characters around a run: the memo stays small.
+		if (runKinds.size > 4096) runKinds.clear();
+		runKinds.set(key, (kind = readRunKind(before, run, after)));
+	}
+	return kind;
+}
+function readRunKind(before: string, run: string, after: string): "left" | "right" | "both" | "none" {
 	const scan = run[0] === "*" ? R_DELIM_AST : R_DELIM_UND;
 	const text = before + run + after;
 	scan.lastIndex = 0;
