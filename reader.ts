@@ -44,57 +44,38 @@ const SPACE = /\s/;
 const LINK_TITLE = String.raw`(?:"(?:\\"?|[^"\\])*"|'(?:\\'?|[^'\\])*'|\((?:\\\)?|[^)\\])*\))`;
 // A link reference definition (marked's def rule): pi shows nothing of it. Its destination and its title may
 // each sit on the next line. Matched against the definition's lines joined with "\n".
-const DEFINITION = new RegExp(String.raw`^\[(?!\s*\])((?:\\.|[^\[\]\\])+)\]: *(?:\n[ \t]*)?(?:[^<\s]\S*|<.*?>)(?:(?: +(?:\n[ \t]*)?| *\n[ \t]*)${LINK_TITLE})? *(?=\n|$)`);
+const DEFINITION = new RegExp(String.raw`^\[(?!\s*\])((?:\\[\s\S]|[^\[\]\\])+)\]: *(?:\n[ \t]*)?(?:[^<\s]\S*|<.*?>)(?:(?: +(?:\n[ \t]*)?| *\n[ \t]*)${LINK_TITLE})? *(?=\n|$)`);
 // The label of a line that may define a link (looser than DEFINITION: used to know which labels pi can link),
 // after any block quote and list markers, in any order and nesting.
-const DEFINED_LABEL = /^[ \t]*(?:(?:>|[-*+]|\d{1,9}[.)])[ \t]*)*\[((?:\\.|[^\[\]\\])+)\]:/;
+const DEFINED_LABEL = /^[ \t]*(?:>[ \t]*|(?:[-*+]|\d{1,9}[.)])[ \t]+)*\[((?:\\.|[^\[\]\\])+)\]:/;
 // A line that opens a label without closing it: a definition's label may go on over the next lines.
-const LABEL_OPEN = /^[ \t]*(?:(?:>|[-*+]|\d{1,9}[.)])[ \t]*)*\[((?:\\.|[^\[\]\\])+)$/;
+const LABEL_OPEN = /^[ \t]*(?:>[ \t]*|(?:[-*+]|\d{1,9}[.)])[ \t]+)*\[((?:\\.|[^\[\]\\])*\\?)$/;
 // A line that closes a label opened on an earlier line and defines it.
 const LABEL_TAIL = /^(?:\\.|[^\[\]\\])*\]:/;
-// The container markers before a label's next line.
-const CONTAINER_PREFIX = /^[ \t>]*/;
-const labelKey = (label: string) => label.trim().replace(/\s+/g, " ").toLowerCase();
+// A loose key: a label without white space, backslashes and ">" (quote markers inside a split label), so every
+// spelling pi may match maps to one key. Looser than pi's matching: a use may read as defined when it is not,
+// which only protects more text.
+const labelKey = (label: string) => label.replace(/[\s\\>]+/g, "").toLowerCase();
 // An inline link's destination and title from its "(" (marked's link rule), over lines joined with "\n".
+// The same with marked's loose destination (any run without spaces, nested parentheses too): read when the strict
+// rule fails, so a target the reader cannot bound exactly is still protected (it may protect more than pi links).
+const LOOSE_TARGET = new RegExp(String.raw`^\(\s*(?:<(?:\\.|[^\n<>\\])+>|[^ \t\n\x00-\x1f]+)(?:(?:[ \t]+(?:\n[ \t]*)?|\n[ \t]*)${LINK_TITLE})?\s*\)`);
 const LINK_TARGET = new RegExp(String.raw`^\(\s*(?:<(?:\\.|[^\n<>\\])+>|[^ \t\n\x00-\x1f()]*(?:\([^ \t\n\x00-\x1f()]*\)[^ \t\n\x00-\x1f()]*)*)(?:(?:[ \t]+(?:\n[ \t]*)?|\n[ \t]*)${LINK_TITLE})?\s*\)`);
-// A bare email address (marked's GFM url rule, email branch).
-const EMAIL = /^[A-Za-z0-9._+-]+@[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![-_])/;
 // An autolink (marked's autolink rule): its target is the link, never prose.
 const AUTOLINK = /^<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s\x00-\x1f<>]*|[A-Za-z0-9.!#$%&'*+/=?^_\x60{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+)>/;
 
 // pi-tui 1.5.2's cjkPunctuationRegex (utils.js, not exported): its bare URLs stop at CJK punctuation.
 const CJK_PUNCTUATION = /(?:(?=\p{Punctuation})[\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}\p{Script_Extensions=Hangul}\p{Script_Extensions=Bopomofo}]|[，．：；！？（）［］｛｝“”‘’…—])/u;
-// A bare URL (marked's GFM url rule and its trailing-punctuation backpedal): pi links it as a whole.
 const URL_START = /(?:[hH][tT][tT][pP][sS]?|[fF][tT][pP]):\/\/|www\.|[A-Za-z0-9._+-]+@/g;
-const URL = /^(?:(?:[hH][tT][tT][pP][sS]?|[fF][tT][pP]):\/\/|www\.)(?:[a-zA-Z0-9-]+\.?)+[^\s<]*/;
-const URL_BACKPEDAL = /(?:[^?!.,:;*_'"~()&]+|\([^)]*\)|&(?![a-zA-Z0-9]+;$)|[?!.,:;*_'"~)]+(?!$))+/;
 /** The start of the next bare URL candidate at or after from, or -1. */
 function urlStart(text: string, from: number): number {
 	URL_START.lastIndex = from;
 	return URL_START.exec(text)?.index ?? -1;
 }
-/** The end of the bare URL or email address at index at, or -1. */
+/** The end of the bare URL or email address at index at (pi's url token, piUrlLength), or -1. */
 function urlEnd(text: string, at: number): number {
-	const length = piUrlLength(text.slice(at));
+	const length = piUrlLength(text, at);
 	return length > 0 ? at + length : -1;
-}
-/** The length of marked's bare URL or email address at the start of rest, 0 for none. */
-function markedUrlLength(rest: string): number {
-	const email = rest.match(EMAIL);
-	if (email) return email[0].length;
-	let url = rest.match(URL)?.[0];
-	if (url === undefined) return 0;
-	for (let previous = ""; previous !== url; ) {
-		previous = url;
-		url = URL_BACKPEDAL.exec(url)?.[0] ?? "";
-	}
-	return url.length;
-}
-/** pi's bare URL (pi-tui's MarkdownTokenizer.url): marked's, read again up to its first CJK punctuation. */
-function piUrlLength(rest: string): number {
-	const length = markedUrlLength(rest);
-	const cut = length > 0 ? rest.slice(0, length).search(CJK_PUNCTUATION) : -1;
-	return cut < 0 ? length : markedUrlLength(rest.slice(0, cut));
 }
 /** The index of the "]" that closes the reference label opening at from, or -1 at an unescaped "[" or none. */
 function labelEnd(text: string, from: number): number {
@@ -106,15 +87,16 @@ function labelEnd(text: string, from: number): number {
 	}
 	return -1;
 }
-/** text holds a "[" or "]" that no backslash escapes (a label holds none). */
-const hasBareBracket = (text: string) => {
+/** The index of the first "[" or "]" of text that no backslash escapes, or -1 (a label holds none). */
+const bareBracketAt = (text: string) => {
 	for (let q = 0; q < text.length; q++) {
 		const c = text[q];
 		if (c === "\\") q++;
-		else if (c === "[" || c === "]") return true;
+		else if (c === "[" || c === "]") return q;
 	}
-	return false;
+	return -1;
 };
+const hasBareBracket = (text: string) => bareBracketAt(text) >= 0;
 /** The index in line of index e of its tab-expanded form (pi's three spaces per tab). */
 function originalIndex(line: string, e: number): number {
 	if (!line.includes("\t")) return e;
@@ -241,21 +223,17 @@ function labelsOf(lines: string[]): Map<string, number[]> {
 		}
 		const open = line.match(LABEL_OPEN);
 		if (!open) continue;
-		// marked's label may hold line breaks, blank lines too (here up to 8 lines, as the reader). The next lines
-		// count with their container markers (a top-level definition) and without (one in a container).
+		// marked's label may hold line breaks, blank lines too, up to its "]" (the loose key drops container
+		// markers). A label holds no bare bracket, so each scan stops at the next opener: linear in the reply.
 		let label = open[1];
-		let raw = open[1];
-		for (let k = i + 1; k < lines.length && k <= i + 8; k++) {
-			const next = lines[k].replace(CONTAINER_PREFIX, "");
-			const tail = next.match(LABEL_TAIL);
+		for (let k = i + 1; k < lines.length; k++) {
+			const tail = lines[k].match(LABEL_TAIL);
 			if (tail) {
 				add(label + "\n" + tail[0].slice(0, -2), i);
-				add(raw + "\n" + lines[k].match(LABEL_TAIL)?.[0].slice(0, -2), i);
 				break;
 			}
-			if (hasBareBracket(next)) break;
-			label += "\n" + next;
-			raw += "\n" + lines[k];
+			if (hasBareBracket(lines[k])) break;
+			label += "\n" + lines[k];
 		}
 	}
 	return labels;
@@ -284,6 +262,8 @@ interface SureFence {
 	start: number;
 	char: string;
 	length: number;
+	/** The first line from start on that opens with the fence's run (read once, when first needed). */
+	end?: number;
 }
 /**
  * Line j is inside a sure fence. Its end is read loosely: any line that opens with the fence's character run
@@ -291,9 +271,13 @@ interface SureFence {
  */
 function inSureFence(lines: string[], fences: SureFence[], j: number): boolean {
 	return fences.some((f) => {
-		if (j < f.start) return false;
-		for (let k = f.start; k <= j; k++) if (lines[k].replace(/^[ \t]*/, "").startsWith(f.char.repeat(f.length))) return false;
-		return true;
+		if (f.end === undefined) {
+			const run = f.char.repeat(f.length);
+			let k = f.start;
+			while (k < lines.length && !lines[k].replace(/^[ \t]*/, "").startsWith(run)) k++;
+			f.end = k;
+		}
+		return f.start <= j && j < f.end;
 	});
 }
 
@@ -362,6 +346,8 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 	// (types 1, 3-5) to its end marker.
 	let htmlShown = false;
 	let htmlShow: false | "flow" | RegExp = false;
+	// The line that closed the last HTML block of types 1, 3-5: the next line starts a new block.
+	let htmlShownEnd = -2;
 	// Set at a math mark in a quote or a list item, where the reader does not follow pi's math: pi may show the
 	// rest as written. Link metadata is then drawn as before. Cleared at the next top-level block after a blank line.
 	let containerMath = false;
@@ -376,6 +362,9 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 		defined ??= labelsOf(lines);
 		const at = defined.get(labelKey(label));
 		if (!at) return false;
+		// The reading now depends on a defining line: no finished-block boundary falls before it, so no cached
+		// head depends on a later line that a replaced suffix may drop.
+		see(at[0]);
 		// The first reading does not know the fences after this line yet: it takes the label as defined, and
 		// readBlocks reads again when only fenced lines define it (checked after the reading).
 		if (!skipFenced) {
@@ -399,13 +388,15 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 		const starts: number[] = [];
 		for (let k = i + 1; k < lines.length && k <= i + 8; k++) {
 			const next = blockOf(lines[k]);
-			if (!next.body.trim() || INTERRUPT.test(next.body) || next.depth !== blockOf(text).depth) break;
+			// A line that may open another block is taken too: if pi ends the paragraph there, the text it shows
+			// as written is only protected more.
+			if (!next.body.trim() || next.depth !== blockOf(text).depth) break;
 			see(k);
 			starts.push(joined.length + 1);
 			joined += "\n" + next.body;
 		}
 		if (starts.length === 0) return undefined;
-		const m = joined.match(LINK_TARGET);
+		const m = joined.match(LINK_TARGET) ?? joined.match(LOOSE_TARGET);
 		if (!m || !m[0].includes("\n")) return undefined;
 		let k = starts.length - 1;
 		while (k >= 0 && starts[k] > m[0].length) k--;
@@ -445,8 +436,9 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 			const word = text.slice(wordStart, p);
 			return word.includes("://") || word.startsWith("www.");
 		};
-		// The innermost open "[" closes into a link after index from (a bare URL there is no link for pi).
-		const formsLink = (from: number): boolean => {
+		// Whether the innermost open "[" closes into a link after index from (a bare URL there is no link for pi):
+		// "link" when sure, "maybe" when the reader cannot prove it either way (both readings are then protected).
+		const formsLink = (from: number): "link" | "maybe" | "none" => {
 			const label = opens[opens.length - 1];
 			for (let q = from, depth = 0; q < text.length; q++) {
 				const ch = text[q];
@@ -454,18 +446,20 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 				else if (ch === "[") depth++;
 				else if (ch === "]" && depth > 0) depth--;
 				else if (ch === "]") {
-					if (label.dead) return false;
-					if (text[q + 1] === "(") return linkTargetEnd(text, q + 1) > 0;
-					// A full or collapsed reference is a link only when its label is defined; an undefined one is text.
+					if (label.dead) return "none";
+					// A target that does not close on this line may close on a later one.
+					if (text[q + 1] === "(") return linkTargetEnd(text, q + 1) > 0 ? "link" : "maybe";
+					// A full or collapsed reference may be a link only when its label may be defined (labelsOf is loose).
 					const close = text[q + 1] === "[" ? labelEnd(text, q + 2) : -1;
 					if (close >= 0) {
 						const ref = text.slice(q + 2, close);
-						return isDefined(ref.trim() ? ref : text.slice(label.at + 1, q));
+						return isDefined(ref.trim() ? ref : text.slice(label.at + 1, q)) ? "maybe" : "none";
 					}
-					return isDefined(text.slice(label.at + 1, q));
+					if (text[q + 1] === "[" && !hasBareBracket(text.slice(q + 2))) return "maybe";
+					return isDefined(text.slice(label.at + 1, q)) ? "maybe" : "none";
 				}
 			}
-			return false;
+			return "none";
 		};
 		for (let p = from; p < text.length; ) {
 			// Jump to the next character that may open a code span, a comment, math, an escape or a construct.
@@ -477,9 +471,15 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 			}
 			if (p >= text.length) break;
 			if (p === nextUrl) {
-				// pi links no bare URL inside the text of a link.
-				const end = !asWritten() && !(opens.length > 0 && formsLink(p)) ? urlEnd(text, p) : -1;
+				// pi links no bare URL inside the text of a link. When the reader cannot prove that link, it protects
+				// the URL and reads on inside it, so the possible link is protected too.
+				const form = opens.length > 0 ? formsLink(p) : "none";
+				const end = !asWritten() && form !== "link" ? urlEnd(text, p) : -1;
 				if (end > p) literal.push([p, end]);
+				if (form === "maybe") {
+					nextUrl = urlStart(text, ++p);
+					continue;
+				}
 				// A failed email candidate is skipped up to its "@", so the search stays linear.
 				p = end > p ? end : text.slice(p).match(/^[A-Za-z0-9._+-]*@/)?.[0].length ? p + text.slice(p).match(/^[A-Za-z0-9._+-]*@/)![0].length : p + 1;
 				nextUrl = urlStart(text, p);
@@ -507,6 +507,13 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 							const close = labelEnd(text, p + 2);
 							const ref = close > 0 ? text.slice(p + 2, close) : undefined;
 							if (ref !== undefined && isDefined(ref.trim() ? ref : text.slice(label.at + 1, p))) end = [i, close + 1];
+							else if (close < 0 && multiline && i + 1 < lines.length && lines[i + 1].trim() && !hasBareBracket(text.slice(p + 2))) {
+								// The reference ID may go on over the next line of the paragraph.
+								const next = lines[i + 1];
+								const tail = labelEnd(next, 0);
+								see(i + 1);
+								if (tail >= 0 && isDefined(text.slice(p + 2) + "\n" + next.slice(0, tail))) end = [i + 1, tail + 1];
+							}
 						} else if (!(text[label.at - 1] === "[" && text[p + 1] === "]") && isDefined(text.slice(label.at + 1, p))) end = [i, p + 1];
 						// (The inner label of a pill, "[[x]]", is not read as a shortcut reference: a documented limit.)
 						if (end) {
@@ -695,7 +702,7 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 		}
 		// Only the end marker of the opening line closes the block: an opener on a line inside it, or on its
 		// closing line, starts nothing (CommonMark: one HTML block ends at the first line with its end marker).
-		const inHtml = htmlEnd !== undefined || htmlFlow;
+		const inHtml = htmlEnd !== undefined || htmlFlow || htmlShow !== false;
 		if (htmlEnd && htmlEnd.test(lines[i])) {
 			htmlEnd = undefined;
 			htmlClosedAt = i;
@@ -749,7 +756,8 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 			paragraph = false;
 			htmlParagraph = false;
 			htmlFlow = false;
-			htmlShow = false;
+			// Types 1 and 3-5 hold blank lines; types 6 and 7 end at one.
+			if (htmlShow === "flow") htmlShow = false;
 			push({ kind: "blank", literal: [], plain: false }, i);
 			const clean = !fence && indentedBase === undefined && !paragraph && !emptyItem && previousDepth === 0 && listColumns.length === 0;
 			// A definition gives meaning to reference links before it, so no head holds one.
@@ -760,7 +768,10 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 		}
 		// This line is in the HTML block of the lines before it; the end marker's line is the block's last.
 		htmlShown = htmlShow !== false;
-		if (htmlShow instanceof RegExp && htmlShow.test(lines[i])) htmlShow = false;
+		if (htmlShow instanceof RegExp && htmlShow.test(lines[i])) {
+			htmlShow = false;
+			htmlShownEnd = i;
+		}
 		// After a blank line, a line indented less than a list item's content ends that item.
 		// Any other line indented less than an item's content, except a lazy paragraph line, ends it too.
 		if (containerMath && depth === 0 && read[i - 1]?.kind === "blank" && (listColumns.length === 0 || indent < listColumns[0])) containerMath = false;
@@ -879,7 +890,7 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 		const open = content.match(FENCE_OPEN);
 		if (open && (marker || innerDepth > 0 || indent - base <= 3) && !(open[1][0] === "\x60" && open[2].includes("\x60"))) {
 			fence = { char: open[1][0], length: open[1].length, base: innerDepth ? 0 : contentBase, depth: depth + innerDepth, line: i };
-			if (depth + innerDepth === 0 && !marker && listColumns.length === 0 && !inHtml && !htmlParagraph && !mathOff && !pendingMath && !containerMath)
+			if (depth + innerDepth === 0 && !marker && listColumns.length === 0 && !inHtml && !htmlShown && !htmlParagraph && !mathOff && !pendingMath && !containerMath)
 				sureFences.push({ start: i + 1, char: fence.char, length: fence.length });
 			paragraph = false;
 			push(code, i);
@@ -905,14 +916,15 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 		// A link reference definition, outside a paragraph (a new list item or quote opens none): pi shows none
 		// of it. Its destination and title may go on over the next lines of the same quote depth.
 		// The label may go on over the next lines: a first line with no "]" may open one.
-		if ((!paragraph || newItem || innerDepth > 0) && !lazy && !mathOff && !containerMath && !htmlParagraph && content[0] === "[" && (content.includes("]:") || (content[1] !== "[" && !content.includes("]")))) {
+		if ((!paragraph || newItem || innerDepth > 0) && !lazy && !mathOff && !containerMath && !htmlParagraph && content[0] === "[" && (content.includes("]:") || bareBracketAt(content.slice(1)) < 0)) {
 			let joined = content;
 			let k = i + 1;
-			for (; k < lines.length && k <= i + 8; k++) {
+			for (let limit = i + 8; k < lines.length && k <= limit; k++) {
 				// A top-level definition is marked's rule over the raw lines: its label may hold any line, a blank
-				// one too, up to its "]".
-				if (depth === 0 && !marker && labelEnd(joined, 1) < 0 && !hasBareBracket(joined.slice(1))) {
+				// one too, up to its "]" (with no line limit: the destination and title then get 8 more lines).
+				if (depth === 0 && !marker && bareBracketAt(joined.slice(1)) < 0) {
 					joined += "\n" + lines[k].replace(/\t/g, "   ");
+					limit = k + 8;
 					continue;
 				}
 				const next = blockOf(lines[k]);
@@ -920,9 +932,25 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 				joined += "\n" + next.body;
 			}
 			const m = joined.match(DEFINITION);
-			if (m) {
-				const last = i + (m[0].match(/\n/g)?.length ?? 0);
-				see(Math.min(k, lines.length - 1));
+			// A label that opens on this line and closes with "]:" on a later one, which the reader cannot read
+			// exactly (in a container, or over quote markers): its lines are protected as if pi hid them, with a
+			// destination and title on the next lines.
+			let unsure = -1;
+			if (!m && bareBracketAt(content.slice(1)) < 0) {
+				let c = i + 1;
+				while (c < lines.length && !hasBareBracket(lines[c])) c++;
+				const at = c < lines.length ? bareBracketAt(lines[c]) : -1;
+				if (at >= 0 && lines[c].startsWith("]:", at)) {
+					unsure = c;
+					const after = lines[c].slice(at + 2).trim();
+					const title = (t: number) => t < lines.length && /^[ \t>]*["'(]/.test(lines[t]);
+					if (c + 1 < lines.length && lines[c + 1].trim() && (!after || title(c + 1))) unsure = c + 1;
+					if (!after && unsure === c + 1 && title(c + 2)) unsure = c + 2;
+				}
+			}
+			if (m || unsure >= 0) {
+				const last = m ? i + (m[0].match(/\n/g)?.length ?? 0) : unsure;
+				see(Math.max(Math.min(k, lines.length - 1), last));
 				paragraph = false;
 				for (; i <= last; i++) push(code, i);
 				i--;
@@ -954,14 +982,29 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 		}
 		// An empty list item holds no paragraph yet.
 		// An HTML block (such as "<div>") may also interrupt a paragraph.
-		if (content.startsWith("<") && !htmlShown && !(paragraph && indent - base > 3)) {
-			// pi's HTML blocks (marked's html rule): types 1, 3-5 up to the line with their end marker; type 6, and
-			// type 7 (a lone tag, which interrupts no paragraph), up to a blank line.
-			const until = HTML_UNTIL.find(([opens]) => opens.test(content));
-			if (until) {
+		// Link protection is off only where the reader is sure that pi shows an HTML block as written: at top level
+		// (no quote, no list), as marked's html rule reads it. Elsewhere links stay protected (at worst a pill pi
+		// shows in HTML text is left as written).
+		if (content.startsWith("<") && !htmlShown && plain && !lazy && content === body) {
+			// After an HTML block of types 1, 3-5 closed on the line before, this line starts a new block.
+			const fresh = !paragraph || htmlShownEnd === i - 1;
+			// Only types 1 and 6 interrupt a paragraph, and only from the line's first column (marked's paragraph rule).
+			const interrupts = fresh || lines[i][0] === "<";
+			// marked reads each opener with the line break after it: the reply's last line has none.
+			const line = i < lines.length - 1 ? content + "\n" : content;
+			const raw = HTML_RAW.exec(line);
+			const until = raw ? undefined : HTML_UNTIL.slice(1).find(([opens]) => opens.test(content));
+			if (raw && interrupts) {
+				// Type 1 ends at the closing tag of its own opener.
+				const end = new RegExp("</" + raw[1] + ">", "i");
+				htmlShown = true;
+				htmlShow = end.test(content.slice(raw[0].length)) ? false : end;
+				if (htmlShow === false) htmlShownEnd = i;
+			} else if (until && fresh) {
 				htmlShown = true;
 				htmlShow = until[1].test(content.slice(2)) ? false : until[1];
-			} else if (HTML_FLOW.test(content) || ((!paragraph || newItem) && HTML_TAG_LINE.test(content))) {
+				if (htmlShow === false) htmlShownEnd = i;
+			} else if ((interrupts && HTML_FLOW_LINE.test(line)) || (fresh && HTML_TAG_LINE.test(content))) {
 				htmlShown = true;
 				htmlShow = "flow";
 			}
@@ -1014,10 +1057,15 @@ const HTML_UNTIL: [RegExp, RegExp][] = [
 	[/^<![A-Za-z]/, />/],
 ];
 
+// marked's type 1 opener: the tag and the space, line break or ">" after it.
+const HTML_RAW = /^<(pre|script|style|textarea)[\s>]/i;
 // CommonMark HTML block type 7 (marked's html rule): an open or closing tag alone on its line.
 const HTML_TAG_LINE = /^(?:<(?!script|pre|style|textarea)[a-z][\w-]*(?: +[a-z:_][\w.:-]*(?: *= *"[^"\n]*"| *= *'[^'\n]*'| *= *[^\s"'=<>\x60]+)?)*? *\/?>|<\/(?!script|pre|style|textarea)[a-z][\w-]*\s*>)[ \t]*$/i;
 // CommonMark HTML block type 6 (marked's tag list): it ends at a blank line and may interrupt a paragraph.
 const HTML_FLOW = /^<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:\s|\/?>|$)/i;
+
+// marked's type 6 opener: the tag, then spaces, a line break or ">" (HTML_FLOW reads any white space there).
+const HTML_FLOW_LINE = new RegExp(HTML_FLOW.source.replace("(?:\\s|\\/?>|$)", "(?: +|\\n|\\/?>)"), "i");
 
 /** Line k opens a display math block that pi's parser takes: closed, or pending with math in it. */
 function opensMathBlock(lines: string[], k: number, see: (k: number) => void): boolean {
@@ -1184,6 +1232,12 @@ function gfmUrlLength(text: string, at: number): number {
 		} while (before !== raw);
 	}
 	return raw.length;
+}
+/** pi's bare URL at index at (pi-tui's MarkdownTokenizer.url): marked's url token (URL before email), read again up to its first CJK punctuation; 0 for none. */
+function piUrlLength(text: string, at: number): number {
+	const length = gfmUrlLength(text, at);
+	const cut = length > 0 ? text.slice(at, at + length).search(CJK_PUNCTUATION) : -1;
+	return cut < 0 ? length : gfmUrlLength(text.slice(at, at + cut), 0);
 }
 /** Where pi's inline math extension may start (its startInline): text stops before it. */
 const MATH_START = /\$|\\[(\[]/g;
@@ -1404,10 +1458,7 @@ function lexInline(all: string, from: number, to: number, literal: Range[], inLi
 			}
 		}
 		if (!inLink) {
-			// pi's url tokenizer reads marked's bare URL again up to its first CJK punctuation.
-			let length = gfmUrlLength(text, i);
-			const cut = length > 0 ? text.slice(i, i + length).search(CJK_PUNCTUATION) : -1;
-			if (cut >= 0) length = gfmUrlLength(text.slice(i, i + cut), 0);
+			const length = piUrlLength(text, i);
 			if (length > 0) {
 				i += length;
 				continue;
