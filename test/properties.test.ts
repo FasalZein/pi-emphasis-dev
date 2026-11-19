@@ -168,7 +168,7 @@ test("the block reader reads fenced code lines as code", () =>
 		expect(readMarkdown(md.split("\n")).slice(1).map((l) => l.kind)).toEqual(md.split("\n").slice(1).map(() => "code"));
 	}));
 
-// Items 1 and 2 of the 2026-11-18 review round. A reply is built from blocks whose pills are either in
+// A reply is built from blocks whose pills are either in
 // prose or in code (inline, fenced, fenced in a quote or a list, indented, tab-indented) or in a hidden
 // HTML comment. The oracle is the generator's own record of which pills are prose.
 const ansiTheme = {
@@ -299,7 +299,7 @@ test("the count line counts exactly the pills drawn, never code or hidden commen
 test("the count line sits at a top-level block boundary: removed, it leaves the reply as pi parses it without", () =>
 	hegel.test((tc) => checkPlace(build(tc.draw(replyOf)).md)));
 
-// The reviewer's inputs (review of f58b0b5), as fixed examples of the two properties.
+// Fixed examples of the two properties: pills in code and hidden comments stay out of prose, and the count line place never splits a list or enters code.
 const five = (pills: string[], line: (p: string, i: number) => string) => pills.map(line).join("\n");
 const REVIEW = {
 	codeInPill: five(["Done", "Done", "Done", "Done", "Failed"], (p) => "- [[" + p + " \x60file\x60]]"),
@@ -320,7 +320,7 @@ const COUNT_CASES: [keyof typeof REVIEW, string[], string[]][] = [
 	["codeSeparated", ["Done", "Failed", "Done", "Done", "Failed"], ["\x60x\x60"]],
 ];
 for (const [name, prose, code] of COUNT_CASES) {
-	test("review input " + name + ": the block reader leaves pills in code and hidden comments out of prose", () => {
+	test("fixed input " + name + ": the block reader leaves pills in code and hidden comments out of prose", () => {
 		const md = REVIEW[name];
 		expect(prosePills(md)).toEqual(prose);
 		for (const c of code) expect(untouched(md, c)).toBe(true);
@@ -329,7 +329,7 @@ for (const [name, prose, code] of COUNT_CASES) {
 }
 
 for (const name of ["orderedParen", "introLooseList", "tabFence"] as const) {
-	test("review input " + name + ": the count line place never splits a list or enters code", () => {
+	test("fixed input " + name + ": the count line place never splits a list or enters code", () => {
 		const md = REVIEW[name];
 		expect(countLineOf(ext, md)).toBeDefined();
 		const lines = md.split("\n");
@@ -343,8 +343,8 @@ for (const name of ["orderedParen", "introLooseList", "tabFence"] as const) {
 // outside code, code spans and HTML comments as pi's parser (marked) reads the same reply. Replies are
 // random sequences of whole lines of the kinds a reply holds. Derandomized (one fixed set of 1,000
 // cases): fresh random runs still find rare replies where the reader and marked differ, all in list items
-// that hold a fence and continue on a less indented or differently marked line; the review round's report
-// (2026-11-18) lists them as open. The reader draws less in most of them, not in all.
+// that hold a fence and continue on a less indented or differently marked line (a known limit: see DESIGN.md).
+// The reader draws less in most of them, not in all.
 const LINES = [
 	"- **S** PILL text", "1) S PILL", "2. S PILL", "  - nested PILL", "> quoted PILL", "> - quoted item PILL", "text PILL more",
 	"text \x60PILL\x60 and PILL", "\x60\x60PILL\x60\x60", "\x60\x60\x60", "~~~", "> \x60\x60\x60", "  \x60\x60\x60", "\t\x60\x60\x60", "- \x60\x60\x60",
@@ -381,7 +381,7 @@ const MATH = [
 	"x $$[[Done p0q]]$$ y [[Done p1q]]",
 	"open $$ [[Done p0q]]\nx $[[Done p1q]]$ y\n\nnext $[[Done p2q]]$",
 ];
-// Review round 1 on 313e76b: a "$" inside a construct that pi's parser tokenizes first (link text or target,
+// A "$" inside a construct that pi's parser tokenizes first (link text or target,
 // emphasis, strikethrough, an HTML tag, an autolink, a bare URL) does not pair with a "$" after it.
 MATH.push(
 	"See [cost $5](https://example.org) and [[Done p0q]] end$",
@@ -398,8 +398,7 @@ MATH.push(
 	"The **price** and $[[Done p0q]]$ now",
 );
 
-// The reviewer's probes (review rounds 1 and 2), inputs as written in
-// ~/.pi/artifacts/reviewer/reader-oracle/probe.ts plus the "$$" forms of round 2. Each pill is checked in both
+// Probes for the reader against pi's parser: math marks next to links, emphasis, fences, rules and quotes. Each pill is checked in both
 // directions: the reader leaves it outside literal ranges exactly when pi shows it as prose (test/oracle.ts),
 // except for a documented limit (DESIGN.md), where the documented reader result is asserted instead.
 const LIMIT = {
@@ -429,7 +428,7 @@ const PROBES: [md: string, limits?: Record<string, keyof typeof LIMIT>][] = [
 	["$\r\n[[Done p0q]]\r\n$\r\n"],
 	["Intro\n\n$\n$\n\nTop $[[Done p0q]]$ now"],
 	["test $3\n[[Done p0q]] $4"],
-	// Round 2: closed top-level math right after a block that ends (fence, thematic break, quote).
+	// Closed top-level math right after a block that ends (fence, thematic break, quote).
 	["~~~\nx\n~~~\n$$\n[[Done p0q]]\n$$\n\n[[Done p1q]]"],
 	["\u0060\u0060\u0060\nx\n\u0060\u0060\u0060\nTop $[[Done p0q]]$ now [[Done p1q]]"],
 	["----\n$$\n[[Done p0q]]\n$$\n\n[[Done p1q]]"],
@@ -437,7 +436,7 @@ const PROBES: [md: string, limits?: Record<string, keyof typeof LIMIT>][] = [
 	["> $$\n> x\n> $$\n\nTop $[[Done p0q]]$ now [[Done p1q]]"],
 	["> $$ x\n\nTop $[[Done p0q]]$ now"],
 	["- $$ x\n\nTop $[[Done p0q]]$ now"],
-	// Round 2 differential find: a math block line cuts the paragraph, so the "$$" before it stays pending.
+	// A math block line cuts the paragraph, so the "$$" before it stays pending.
 	["[[Done p0q]] $$\nx $[[Done p1q]]$ y\n$$ [[Done p2q]]"],
 ];
 /** Pill id to whether the reader leaves it outside literal ranges in a prose or heading line. */
@@ -454,7 +453,7 @@ function readerProse(md: string): Map<string, boolean> {
 	return out;
 }
 for (const [md, limits = {}] of PROBES) {
-	test("review probe: per pill, the block reader equals pi or its documented limit in " + JSON.stringify(md), () => {
+	test("probe: per pill, the block reader equals pi or its documented limit in " + JSON.stringify(md), () => {
 		expect.hasAssertions();
 		const ids = [...md.matchAll(/p\d+q/g)].map((m) => m[0]);
 		const shown = piShown(md, ids);

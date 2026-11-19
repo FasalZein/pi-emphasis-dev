@@ -1,4 +1,4 @@
-// Reader correctness (slice C1): line endings and fences, link metadata, escapes and Setext headings follow
+// Reader correctness: line endings and fences, link metadata, escapes and Setext headings follow
 // pi's parser. Expected values come from pi's own rendering through test/oracle.ts (pi-tui's Markdown), from
 // the CommonMark escape rule, or from the drawing of the equivalent unescaped or ATX form.
 import { describe, expect, test } from "bun:test";
@@ -81,7 +81,7 @@ describe("link metadata", () => {
 			expect(piLinks(ext.draw(md))).toEqual(piLinks(md));
 		});
 	}
-	// Owner decision 2026-11-18: a pill or bold in link text is not drawn and not counted, so the link stays
+	// A pill or bold in link text is not drawn and not counted, so the link stays
 	// the working link pi draws (an escape in the text would break it). Expected: pi's link targets and visible
 	// text of the reply alone.
 	for (const md of ["See [**it** now](/a__b) too", "See [it ✓ → **x**][r] too\n\n[r]: /a__b", "See [**it**] too\n\n[**it**]: /a__b", "See ![**it** [[Done p0q]]](/i.png) too", "See [it [[Done p0q]]](/x) too", "See [[[Done p0q]] it][r] too\n\n[r]: /x", "See [[Done p0q]](/x) too"]) {
@@ -147,8 +147,8 @@ describe("oracle", () => {
 	});
 });
 
-// Review round 1 on ce3acf7 (~/.pi/artifacts/reviewer/reader-correctness/report.md), each probe as written there.
-describe("review round 1", () => {
+// Cache, CRLF and link edge cases that an earlier reader got wrong.
+describe("reader edge cases", () => {
 	test("a head cached from another reply does not split its CRLF: equal to the uncached drawing, breaks as written", () => {
 		const score = "[[Done]] [[Failed]] [[Passed]] [[Blocked]] [[Needs you]] text";
 		const streamed = load(stub);

@@ -1,4 +1,4 @@
-// The block reader's time grows linearly with the reply. Review round 1 on 313e76b: each unclosed "$"
+// The block reader's time grows linearly with the reply. Each unclosed "$"
 // searched the rest of its paragraph, so a paragraph of N such lines took time quadratic in N.
 import { expect, test } from "bun:test";
 import { readMarkdown } from "../reader.ts";

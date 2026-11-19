@@ -9,15 +9,7 @@ This is a fork of [pi-emphasis](https://github.com/johnlindquist/pi-emphasis) by
 - **Settings.** An optional `emphasis` block in pi's `settings.json` sets the pill ends, the icons, the label color, and the color and fill of each tone. See [Settings](#settings).
 - **No environment switches.** The four `PI_EMPHASIS_*` environment variables are gone. The rules are always on in the terminal interface.
 
-Sync with upstream: the remote `upstream` points at the original repository.
-
-```sh
-git fetch upstream
-git merge upstream/main
-bun run check
-```
-
-Merge conflicts usually sit in the guidance and the switches; keep this fork's side there. The rest of this README is upstream's, corrected where the fork makes it false.
+What is rewritten and what is upstream's: the compact rules, the new look, the settings and the removal of the environment switches are this fork's. The rest of this README, and the drawing code that it describes, come from upstream, corrected where the fork makes it false. Upstream's MIT notice stays in [LICENSE](LICENSE). To merge upstream changes, see [Development](#development).
 
 Replies you can scan. This [Pi](https://pi.dev/) extension turns `[[Done]]`, `[[Failed]]` and `[[Needs you]]` into colored pills with icons, gives headings and lead labels an icon from their word, and colors bold text, arrows and tree lines.
 
@@ -27,13 +19,13 @@ The reply above is an invented example about an imagined deploy. This is the sam
 
 ![The same reply as plain Markdown, with the pills shown as bracketed words](screenshots/without.png)
 
-It changes only what is drawn. Stored messages, copied text and HTML exports keep the original Markdown. It calls no model and costs nothing to run.
+It changes only what is drawn. Stored messages, copied text and HTML exports keep the original Markdown. It makes no extra model call. The `reply_style` prompt section does add input tokens to each model request: see [The rules come with it](#the-rules-come-with-it).
 
 ## Requirements
 
 | You need | Why | Without it |
 |---|---|---|
-| [Pi](https://github.com/earendil-works/pi) 1.5 or newer (checked on 1.5.2) | This is a Pi extension | It cannot be installed |
+| [Pi](https://github.com/earendil-works/pi) 1.5.1 or newer, below 2 (tested on 1.5.2) | This is a Pi extension | It cannot be installed. An older Pi may load it without honoring the assistant-only registration filter |
 | A terminal that can draw [Nerd Font](https://www.nerdfonts.com/) symbols | The icons and the rounded pill ends are Nerd Font symbols | You see empty boxes or question marks. See [Set up your terminal](#set-up-your-terminal) |
 | A terminal with color | Pills are colored backgrounds | Pills are drawn in reverse video, all in one color |
 
@@ -41,17 +33,19 @@ Checked on macOS only. Setup takes about two minutes if your terminal already ha
 
 ## Install
 
-This fork has no public address. Install it from its local path:
+Git must be installed. Install from this repository:
 
 ```sh
-pi install /path/to/pi-emphasis
+pi install git:github.com/FasalZein/pi-emphasis
 ```
 
 Then run `/reload` in Pi, or start Pi again.
 
-- Update: `git pull` in the fork, then `/reload`
-- Try once without installing: `pi -e /path/to/pi-emphasis`
-- Remove: `pi remove /path/to/pi-emphasis`
+- Update: `pi update git:github.com/FasalZein/pi-emphasis`
+- Try once without installing: `pi -e git:github.com/FasalZein/pi-emphasis`
+- Remove: `pi remove git:github.com/FasalZein/pi-emphasis`
+
+Alternative, from a local checkout: clone the repository, then run `pi install /path/to/pi-emphasis`. Update it with `git pull` and `/reload`. Try it once with `pi -e /path/to/pi-emphasis`. Remove it with `pi remove /path/to/pi-emphasis`.
 
 ## Set up your terminal
 
@@ -86,7 +80,7 @@ To keep your current font, install only the symbols with `brew install --cask fo
 
 You should see four rounded pills, each with an icon: Done on a green panel, Needs you in solid yellow, Failed on a red panel and Costs money in solid red.
 
-**No Nerd Font?** Set `"icons": "none"` and `"edges": "half"` or `"sharp"` in the `emphasis` settings ([Settings](#settings)). Half blocks are standard Unicode characters, so every terminal font draws them.
+**No Nerd Font?** Set `"icons": "none"` and `"edges": "half"` or `"sharp"` in the `emphasis` settings ([Settings](#settings)). Half blocks are standard Unicode characters, so every terminal font draws them. This covers pills only: heading labels, lead labels and action lead-ins keep their icon glyphs.
 
 ## The rules come with it
 
@@ -123,7 +117,7 @@ The colors come from the current pi theme, so a theme chosen with the Theme sele
 - **Synonyms.** Completed, Complete, OK and Finished display as Done. Fail, Failing and Error display as Failed. Pass displays as Passed, Waiting as Pending, and Needs review as Review.
 - **Your own icon.** A label that starts with a Nerd Font glyph keeps that glyph.
 - **Length.** A label can be up to 32 characters. Longer ones are left as typed.
-- **Count line.** When a reply has 5 or more state pills of at least 2 words, a line after its last block shows one pill per word with its count, asks first: [[Needs you 1]] [[Partial 1]] [[Done 4]]. The line appears when the reply is complete, so nothing above it moves. A reply that already has a line of only pills gets no count line. Pills in code, inline code and HTML comments are not drawn and not counted. Pi hands the extension each text block of a message on its own, so the count line counts the pills of one text block: a message with text before and after a tool call can show two count lines, or none.
+- **Count line.** When a reply has 5 or more state pills of at least 2 words, a line after its last block shows one pill per word with its count, asks first: [[Needs you 1]] [[Partial 1]] [[Done 4]]. The line appears when the reply is complete, so nothing above it moves. A reply that already has a line of two or more pills and no other text gets no count line. Pills in code, inline code and HTML comments are not drawn and not counted. Pi hands the extension each text block of a message on its own, so the count line counts the pills of one text block: a message with text before and after a tool call can show two count lines, or none.
 
 ## Labels and shapes
 
@@ -260,7 +254,7 @@ By default, `ask` and `danger` are `solid` and the other tones are `panel`. That
 
 ### What has no setting
 
-- **The count line.** In a reply with 5 or more state pills (asks, wrong, open and settled words) of at least 2 different words, a line after the last block shows one pill per word with its count. Asks come first. The line is its own paragraph after a blank line, so the text above it does not move when it appears. A reply that ends inside an open code fence or comment, an HTML block such as `<pre>`, or a math block (`$$`, `\[`) keeps the line at its earlier place: after the first paragraph or heading when a blank line closes it, otherwise above the first line. It never goes inside a list, a quote or code. The line counts the pills that are drawn: pills in code, inline code and HTML comments are not drawn and not counted. The line waits until the reply is complete. A reply that already has a line of only pills gets no count line. The count is per text block: pi hands the extension each text block of a message on its own, so a message with text before and after a tool call can show a count line for each block, or none when no block has 5 state pills.
+- **The count line.** In a reply with 5 or more state pills (asks, wrong, open and settled words) of at least 2 different words, a line after the last block shows one pill per word with its count. Asks come first. The line is its own paragraph after a blank line, so the text above it does not move when it appears. A reply that ends inside an open code fence or comment, an HTML block such as `<pre>`, or a math block (`$$`, `\[`) keeps the line at its earlier place: after the first paragraph or heading when a blank line closes it, otherwise above the first line. It never goes inside a list, a quote or code. The line counts the pills that are drawn: pills in code, inline code and HTML comments are not drawn and not counted. The line waits until the reply is complete. A reply that already has a line of two or more pills and no other text gets no count line. The count is per text block: pi hands the extension each text block of a message on its own, so a message with text before and after a tool call can show a count line for each block, or none when no block has 5 state pills.
 - **The rules.** The `reply_style` prompt section is the `REPLY_STYLE` constant in [`index.ts`](index.ts).
 - **Words, synonyms and icons.** Edit the tables at the top of [`index.ts`](index.ts).
 
@@ -290,5 +284,16 @@ bun install
 bun run check                # types and tests, including Hegel property tests
 python3 demo/shots.py        # redraw the demo replies in a real Pi session, as HTML to screenshot
 ```
+
+To merge upstream changes, add the original repository as a remote once, then merge:
+
+```sh
+git remote add upstream https://github.com/johnlindquist/pi-emphasis
+git fetch upstream
+git merge upstream/main
+bun run check
+```
+
+Merge conflicts usually sit in the guidance and the switches; keep this fork's side there.
 
 `demo/` holds the two example replies. `sgr-sampler.sh` prints every terminal text style so you can see which ones your terminal draws.

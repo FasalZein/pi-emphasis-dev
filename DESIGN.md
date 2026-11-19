@@ -1,20 +1,19 @@
 # DESIGN: pi-emphasis reply style (terminal)
 Direction: calm and scannable: one pill family of the same size, inline after its subject, asks in solid yellow; the model writes the shape, the renderer draws everything it can know.
 Tree:
-- renderer / layout -> pills inline after the subject, "**Subject** [[Pill]] text" (round 2, 2026-11-18)
-- renderer / palette -> tinted panels taken from the current pi theme (round 2 sheet, 2026-11-18)
-- renderer / edges -> round: Powerline caps, 1 cell, no space inside (round 5, 2026-11-18)
-- renderer / edges setting -> round | half (half blocks, 1/2 cell, square) | sharp (square, 1 cell of fill) (round 5 and 6, 2026-11-18)
-- renderer / icons -> filled Material Design circle set; setting filled | outline | none (round 3 and 6, 2026-11-18)
-- renderer / icon size -> an en space (U+2002) between icon and word: Ghostty then draws the icon over two cells, about the height of the letters, in the same pill width; pi keeps icon and word on one line (round 11, 2026-11-18)
-- renderer / asks -> Needs you and Decision have their own tone "ask", solid yellow (round 6, 2026-11-18)
-- renderer / count line -> one pill per word under the first paragraph, 5 or more state pills, asks first (round 6, 2026-11-18); moved after the last block (streaming layout, 2026-11-18)
-- renderer / labels and lead-ins -> icons as before (round 6); color blue, theme mdLink, as the default; setting `labels` with any theme color or hex; the owner's own settings use cyan, mdListBullet (round 9 and after, 2026-11-18)
-- renderer / closing line of asks -> none (rules round, 2026-11-18)
-- renderer / colors setting -> per tone: a pi theme color name or "#rrggbb"; fill per tone: panel | solid | text (round 6, 2026-11-18)
-- rules -> c4g, 310 prompt tokens on cpa/claude-opus-5-5, 188 by tiktoken o200k_base (second rules round, 2026-11-18; c3 had 358 and 200)
-- rules / consequence pills -> Costs money and Destructive once, before an action that waits for approval; a cost is mentioned only there or when it passes the approved amount (owner rule 2026-11-18T10:40Z, second rules round)
-- terminal font -> Ghostty font-family "MonaspiceNe Nerd Font" (owner's config, outside this repository)
+- renderer / layout -> pills inline after the subject, "**Subject** [[Pill]] text"
+- renderer / palette -> tinted panels taken from the current pi theme
+- renderer / edges -> round: Powerline caps, 1 cell, no space inside
+- renderer / edges setting -> round | half (half blocks, 1/2 cell, square) | sharp (square, 1 cell of fill)
+- renderer / icons -> filled Material Design circle set; setting filled | outline | none
+- renderer / icon size -> an en space (U+2002) between icon and word: Ghostty then draws the icon over two cells, about the height of the letters, in the same pill width; pi keeps icon and word on one line
+- renderer / asks -> Needs you and Decision have their own tone "ask", solid yellow
+- renderer / count line -> one pill per word under the first paragraph, 5 or more state pills, asks first; it sits after the last block, so nothing above it moves when the reply completes
+- renderer / labels and lead-ins -> icons as for pills; color blue, theme mdLink, as the default; setting `labels` with any theme color or hex
+- renderer / closing line of asks -> none
+- renderer / colors setting -> per tone: a pi theme color name or "#rrggbb"; fill per tone: panel | solid | text
+- rules -> a compact rule set (the Copy section below): 188 tokens by tiktoken o200k_base
+- rules / consequence pills -> Costs money and Destructive once, before an action that waits for approval; a cost is mentioned only there or when it passes the approved amount
 Tokens:
 - Tones: success (theme success), error (theme error), warning (theme warning), ask (theme warning), danger (theme error), mode (theme accent), owner (theme customMessageLabel), neutral (theme selectedBg + text).
 - Panel fill: the tone color mixed 22% into the theme's toolPendingBg; label in the tone color, bold. Solid fill: the tone color as background; label in whichever of toolPendingBg or text contrasts more with it.
@@ -22,7 +21,7 @@ Tokens:
 - 256-color terminals: theme tokens as before (panel = the tone's tool background, solid = reverse video); hex colors map to a 256 color as pi maps theme colors (pi-tui `foregroundAnsi` chooses the index: the xterm cube, or the gray ramp for near-gray colors).
 - Pills next to each other are separated by two spaces.
 Type: the terminal's font; the extension cannot change size or face. Icons are Nerd Font Material Design glyphs that all measure 599x600 units in a Nerd Font Mono cell, centred on the cap height.
-Layout: inline. The count line sits after the last block, as its own paragraph (owner decision 2026-11-18, streaming layout: nothing above it moves when the reply completes).
+Layout: inline. The count line sits after the last block, as its own paragraph: nothing above it moves when the reply completes.
 Components:
 - Pill: [edge] [icon] [en space] [word or word + detail] [edge]. No-break spaces inside the word.
 - Icon sets (filled / outline): settled check-circle, failed close-circle, blocked minus-circle, consequence alert-octagon, needs you account-circle, decision help-circle, unverified dots-circle, in progress play-circle, pending clock, partial half-circle, skipped skip-next-circle, at risk alert-circle; kinds of work: lightbulb, magnify, eye-circle, code-braces, checkbox-circle.
@@ -30,7 +29,7 @@ Components:
 States:
 - Streaming: no count line until the reply is complete. An unfinished trailing pill (`[[Wor`, label of at most 32 characters, or a lone `[`), an opening bold marker that nothing closes yet (`**Resu` or `__Resu`, a left-flanking run that is not right-flanking, of at most 32 characters; a lone `*` or `_` after a space) and a last line that is a heading wait until they complete (pi trims the text, so a heading is complete only when a line follows it). A closing marker, a run between spaces (`2 ** 3`) and stars inside a complete pill never wait. The text before them loses its trailing spaces, and a line left empty goes with its line break. Only the last line is held, decided from the tail's own context: never inside an open HTML block or paragraph, display math or pending math (the block reader's end state, read on the text with currency signs escaped as pi sees it), never in a literal range, never a tail with a backtick, "$", "<" or backslash, and never after an unclosed backtick, a "<" without ">", a math "$" (a "$" before a digit is currency) or "\(" / "\[" on its line. A heading waits unless it holds inline code or such a sign. The complete reply is drawn as written (owner decision 2026-11-18).
 - Label and action icons: an en space (U+2002) joins the icon to its word, as in pills, so pi never wraps between them and Ghostty still draws the icon over two cells (a no-break space U+00A0 would make Ghostty draw it in one cell).
-- A reply that already holds a line of only pills (a written scoreboard): no count line.
+- A reply that already holds a line of two or more pills and no other text (a written scoreboard): no count line.
 - Code (fenced, also in quotes and lists; indented; inline), HTML comments, closed math at top level (inline $…$, $$…$$, \(…\), \[…\], and $$ or \[ blocks) and escaped markers: untouched, and their pills are neither drawn nor counted. Where the reader is not sure a line is prose, it treats it as code.
 - Links (owner decision 2026-11-18): a link is left to pi as a whole, its text included, so a pill, bold or glyph color in link text is neither drawn nor counted and the link keeps pi's target. This covers inline links and images, reference links to a label defined in the reply, reference definitions, autolinks, bare URLs and emails. Text in the shape of a link that holds a pill (`[a [[Done]]](/x)`, which pi shows as written) is left as written too. LF, CRLF and CR all end a line, and the drawing keeps each break as written. A pill or a marker after an odd backslash run stays as written. A Setext heading (a paragraph over `===` or `---` in its own container, as marked's lheading rule takes it) is a heading, like `#`, without the label icon.
 - Limits of the link and heading reading: a link target or definition is read over at most 8 more lines, and link text over one line only. After pending math in a block quote or a list item, or in a paragraph that opens with "<" (a possible HTML block), links are drawn as before (pi may show the rest as written). While streaming, a paragraph followed by a line of only "-" (the start of a list item) is a Setext heading for pi and for the drawing until the item's text arrives. No finished-block head holds a line that may define a link label, and a later such line drops the head. The label inside a pill's brackets (`[[x]]`) is not read as a shortcut reference link, even when the reply defines `[x]:`.
@@ -39,7 +38,7 @@ States:
 - The count line counts the pills that are drawn. It goes after the last block, after a blank line, so it never splits a list or enters code. A reply that ends inside a block a blank line does not close (an open fence or comment, an HTML block of CommonMark types 1, 3, 4 or 5 such as `<pre>` or `<?pi`, or display math such as `$$` or `\[`) keeps it at its earlier place: after a first paragraph or heading closed by a blank line, otherwise above the first line. Only the end marker of an HTML block's opening line closes it: another opener, a math mark or a lone ">" inside an HTML block (types 1, 3-6) is HTML text, and after the end line pi starts a new block, so a tail there waits while streaming. It is per text block of a message, because pi transforms each block on its own.
 - A setting that names a color the pi theme does not know falls back to that field's default.
 - Streaming cache: pi redraws the whole reply up to once per frame. Each extension instance keeps one entry: the drawn lines of the reply's finished blocks, up to the last blank line after which the block reader's state is its start state and which no earlier lookahead read past (readBlocks in reader.ts). Only streaming calls build it; a later call on a reply that starts with that text, under the same palette, draws only the rest; the output is byte-identical to drawing the whole. The entry and the label memos hold detached copies (no slice of an earlier reply), so they keep one reply's head and at most 512 short labels per memo. A "$$" or "\\[" line, an open list or quote, or an unclosed construct ends reuse until the reader's state is clean again.
-Copy (the reply_style section, c4g):
+Copy (the reply_style section):
   The terminal draws [[Word]] as a colored pill and gives a bold lead label an icon.
   - Open with **Result:**.
   - Long reply: open with [[Kind]] **Result:**, Kind one of Brainstorm, Investigate, Preview, Implement, Qualify; a ## heading per group; each bullet **Subject** [[Pill]] text.
@@ -48,5 +47,3 @@ Copy (the reply_style section, c4g):
   - Costs money and Destructive: once, before an action that waits for approval. Mention a cost only there, or when it passes the approved amount.
 Settings (pi settings.json, all optional):
   "emphasis": { "edges": "round", "icons": "filled", "labels": "mdLink", "colors": { "<tone>": "<theme color or #rrggbb>" }, "fill": { "<tone>": "panel|solid|text" } }
-Open for the build: none
-References: none (no DMD run)

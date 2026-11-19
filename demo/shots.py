@@ -6,8 +6,12 @@ Each reply in demo/*.md is placed in a session file as an assistant message, ope
 detached tmux session with only this extension loaded, and the drawn screen is converted to HTML.
 Screenshot the <pre id="t"> element of each page with any browser. Needs pi, tmux, and a
 JetBrains Mono Nerd Font in ~/Library/Fonts. No model is called.
+
+Each run starts its own tmux server on a private socket and keeps its session file and settings in a
+temporary directory. It never touches your own tmux sessions. At the end it stops only its own server
+and removes the temporary directory.
 """
-import html, json, pathlib, re, subprocess, time, uuid
+import html, json, pathlib, re, shlex, shutil, subprocess, tempfile, time, uuid
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "demo/out"
@@ -62,9 +66,17 @@ def convert(ansi):
     return "".join(out)
 
 
-def session(prompt, reply):
+# One private tmux server per run: "tmux -L" names a socket, so no session on the default server is visible here.
+SOCKET = "pi-emphasis-shot-" + uuid.uuid4().hex[:8]
+
+
+def tmux(*args, **kwargs):
+    return subprocess.run(["tmux", "-L", SOCKET, "-f", "/dev/null", *args], **kwargs)
+
+
+def session(prompt, reply, work):
     """A Pi session file holding one prompt and one scripted assistant reply."""
-    rows = [{"type": "session", "version": 3, "id": str(uuid.uuid4()), "timestamp": "2026-01-01T10:00:00.000Z", "cwd": str(OUT)}]
+    rows = [{"type": "session", "version": 3, "id": str(uuid.uuid4()), "timestamp": "2026-01-01T10:00:00.000Z", "cwd": str(work)}]
     parent = None
     for message in (
         {"role": "user", "content": [{"type": "text", "text": prompt}], "timestamp": 1},
@@ -75,24 +87,31 @@ def session(prompt, reply):
         row = {"type": "message", "id": uuid.uuid4().hex[:8], "parentId": parent, "timestamp": "2026-01-01T10:00:01.000Z", "message": message}
         rows.append(row)
         parent = row["id"]
-    path = OUT / "session.jsonl"
+    path = work / "session.jsonl"
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
     return path
 
 
 def shot(name, prompt, reply_file, extension=True, rows=60, cols=112):
-    agent = OUT / "agent"
-    agent.mkdir(parents=True, exist_ok=True)
-    (agent / "settings.json").write_text('{"theme":"dark","quietStartup":true}')
-    path = session(prompt, (ROOT / "demo" / reply_file).read_text())
-    load = f"-e {ROOT / 'index.ts'}" if extension else ""
-    command = f"cd {OUT} && PI_CODING_AGENT_DIR={agent} COLORTERM=truecolor pi --session {path} -ne {load} -ns -np -nc --no-mcp --offline; sleep 60"
-    tmux = "pi-emphasis-shot"
-    subprocess.run(["tmux", "kill-session", "-t", tmux], capture_output=True)
-    subprocess.run(["tmux", "new-session", "-d", "-s", tmux, "-x", str(cols), "-y", str(rows), command], check=True)
-    time.sleep(8)
-    raw = subprocess.run(["tmux", "capture-pane", "-t", tmux, "-p", "-e"], capture_output=True, text=True).stdout
-    subprocess.run(["tmux", "kill-session", "-t", tmux], capture_output=True)
+    OUT.mkdir(parents=True, exist_ok=True)
+    work = pathlib.Path(tempfile.mkdtemp(prefix="pi-emphasis-shot-"))
+    try:
+        agent = work / "agent"
+        agent.mkdir()
+        (agent / "settings.json").write_text('{"theme":"dark","quietStartup":true}')
+        path = session(prompt, (ROOT / "demo" / reply_file).read_text(), work)
+        load = f"-e {shlex.quote(str(ROOT / 'index.ts'))}" if extension else ""
+        command = f"cd {shlex.quote(str(work))} && PI_CODING_AGENT_DIR={shlex.quote(str(agent))} COLORTERM=truecolor pi --session {shlex.quote(str(path))} -ne {load} -ns -np -nc --no-mcp --offline; sleep 60"
+        tmux("new-session", "-d", "-s", "shot", "-x", str(cols), "-y", str(rows), command, check=True)
+        time.sleep(8)
+        raw = tmux("capture-pane", "-t", "shot", "-p", "-e", capture_output=True, text=True).stdout
+    finally:
+        # Stops only the server on this run's private socket, then removes that socket file.
+        socket_path = tmux("display-message", "-p", "#{socket_path}", capture_output=True, text=True).stdout.strip()
+        tmux("kill-server", capture_output=True)
+        if socket_path:
+            pathlib.Path(socket_path).unlink(missing_ok=True)
+        shutil.rmtree(work, ignore_errors=True)
     lines = raw.split("\n")
     plain = [re.sub(r"\x1b\[[0-9;]*m", "", line) for line in lines]
     start = next(i for i, line in enumerate(plain) if prompt in line) - 1

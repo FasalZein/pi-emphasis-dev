@@ -157,7 +157,7 @@ describe("readSettings", () => {
 });
 
 describe("faint theme colors", () => {
-	// Review round 1 on 5619523: pi's theme.colors gives a faint (dim) token an approximation mixed toward the
+	// Pi's theme.colors gives a faint (dim) token an approximation mixed toward the
 	// background, while the token's escape keeps the original color plus SGR 2. Pills use the original color.
 	test("a faint RGB tone color draws its panel from the original color, as without faint", () => {
 		// Every pi token set (a Theme needs them all), then the colors the pills read.

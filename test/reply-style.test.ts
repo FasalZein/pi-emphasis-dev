@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { indexedColor } from "@earendil-works/pi-tui";
 import { load as loadExtension, toneOf } from "./seam.ts";
 
-// The tested rules: rule set c4g of the 2026-11-18 rules round (310 tokens, DESIGN.md). Pi renders a
+// The tested rules (the Copy section of DESIGN.md). Pi renders a
 // section as "<name>\n" + content + "\n</name>" (dist/core/system-prompt.js).
 const RULES = `<reply_style>
 The terminal draws [[Word]] as a colored pill and gives a bold lead label an icon.

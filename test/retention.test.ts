@@ -1,7 +1,6 @@
-// Retained heap after GC (review round 1 on c0caf47, both P1 findings): what outlives a call (the streaming
-// cache, the label and pill memos) must not keep earlier replies alive through slices of them.
-// c0caf47 retained 38.6 MB for the first case and 4.36 MB for the second (Bun and Node alike); base 0d171d1
-// about 0.5 MB and 0.01 MB. The same check runs under Node in ~/.pi/artifacts/worker/speed-cache/retention-check.mjs.
+// Retained heap after GC: what outlives a call (the streaming cache, the label and pill memos) must not
+// keep earlier replies alive through slices of them. A cache that keeps slices retained about 38.6 MB in the
+// first case and 4.36 MB in the second (Bun and Node alike); detached copies keep about 0.5 MB and 0.01 MB.
 import { expect, test } from "bun:test";
 import { load } from "./seam.ts";
 

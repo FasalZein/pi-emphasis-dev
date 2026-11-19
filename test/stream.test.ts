@@ -1,4 +1,4 @@
-// The layout while a reply streams (owner decision 2026-11-18): the count line goes after the last block, an
+// The layout while a reply streams the count line goes after the last block, an
 // unfinished tail (a pill, a bold label, a heading line) waits until it completes, and an action or label icon
 // is joined to its word, so it never ends a row alone. Rendering goes through pi-tui's Markdown, as pi draws it.
 import { describe, expect, test } from "bun:test";
@@ -122,7 +122,7 @@ describe("an icon never ends a row alone", () => {
 		}));
 });
 
-// Review round 1 (a220492). Each case is rendered through pi-tui, streamed after a warm cache and on a fresh instance.
+// Each case is rendered through pi-tui, streamed after a warm cache and on a fresh instance.
 // pi-tui's renderBlock is private: it is reached through an untyped subclass.
 const PiMarkdown = Markdown as unknown as new (...args: unknown[]) => { render(width: number): string[]; renderBlock(...args: unknown[]): unknown };
 class Track extends PiMarkdown {
@@ -149,7 +149,7 @@ function streamed(md: string, width = 120): string[] {
 }
 const finished = (md: string, width = 120) => rows(load(truecolor).draw(md), width);
 
-describe("review round 1", () => {
+describe("count line and held tails", () => {
 	for (const tail of ["<pre>\nlast", "<?pi\nlast", "<!DOCTYPE x\nlast", "<![CDATA[\nlast", "$$\nx^2", "\\[\nx^2", "```js\nlast", "<!--\nlast", "<pre>\n\nlast", "- item\n\n  ```\n  code"]) {
 		test("a reply that ends in an open block " + JSON.stringify(tail) + " keeps the count line out of it, as its own paragraph", () => {
 			expect(countOwners(load(truecolor).draw(FIVE + "\n\n" + tail))).toEqual(["paragraph"]);
@@ -173,7 +173,7 @@ describe("review round 1", () => {
 	}
 });
 
-// Hegel review round 1 (31bb990). The expected outcome comes from pi's own reading of the source text: the
+// The expected outcome comes from pi's own reading of the source text: the
 // pi-tui Markdown token that holds a line, never the extension's drawing of a second candidate.
 class Tokens extends PiMarkdown {
 	tokens: { type: string; raw: string }[] = [];
@@ -204,7 +204,7 @@ const TAILS = ["[[Do", "alpha [[Do", "**Fix", "alpha **Fix", "alpha", "[[Done]] 
 const shape = gs.record({
 	kind: gs.sampledFrom(KINDS),
 	// Another block's opening line, or an end line that does not start with "<" (a lone "</pre>" after a closed
-	// block is a paragraph for pi that the reader shows as written: see the report's OPEN).
+	// block is a paragraph for pi that the reader shows as written).
 	body: gs.arrays(gs.oneOf(gs.sampledFrom(["text", "[[Done]] x", "**Fix:** y", ">"]), gs.sampledFrom(KINDS.flatMap((k) => BLOCKS[k]).filter((l, i) => i % 2 === 0 || l[0] !== "<"))), { maxSize: 2 }),
 	closed: gs.booleans(),
 	gap: gs.sampledFrom(["\n", "\n\n"]),
@@ -217,32 +217,31 @@ function compose(s: Shape) {
 	const block = [open, ...s.body, ...(s.closed ? [close] : [])].join("\n");
 	return (s.five ? FIVE + "\n\n" : "") + block + s.gap + s.tail;
 }
-/** The unfinished pill or bold label at the end of a tail, as the 17:13Z rule names it; -1 when none. */
+/** The unfinished pill or bold label at the end of a tail, -1 when none. */
 const tailOpen = (tail: string) => Math.max(tail.endsWith("[[Do") ? tail.length - 4 : -1, tail.endsWith("**Fix") ? tail.length - 5 : -1);
-const counts: Record<string, number> = {};
 /** The drawn count line of FIVE on its own, where nothing can hold it. */
 const COUNT = load(truecolor).draw(FIVE).split("\n").at(-1)!;
 
-describe("Hegel round 1: block transitions", () => {
+/** The streamed check for one shape: the tail shows in full in a block's literal text, and waits where pi starts a paragraph. */
+function checkStreamed(s: Shape) {
+	const md = compose(s);
+	const owner = tokensOf(md).at(-1)!;
+	const out = load(truecolor).draw(md, true);
+	const cut = tailOpen(s.tail);
+	if (owner.type === "paragraph" && owner.raw.trimEnd().endsWith(s.tail) && cut >= 0) {
+		// Held: the text before the tail, without trailing spaces, and the line break before a line left empty.
+		const shown = md.slice(0, md.length - s.tail.length + cut).replace(/[ \t]+$/, "").replace(/\n$/, "");
+		expect(out).toBe(load(truecolor).draw(shown, true));
+		expect(out.replace(ESCAPE, "").endsWith(s.tail.slice(cut))).toBe(false);
+	} else if (owner.type !== "paragraph") {
+		// Text of a block: nothing waits, and the tail's last word shows as written.
+		expect(out.replace(ESCAPE, "").endsWith(s.tail.slice(s.tail.lastIndexOf(" ") + 1))).toBe(true);
+	}
+}
+
+describe("block transitions", () => {
 	test("streamed: the tail shows in full where pi reads it as a block's literal text, and waits where pi starts a paragraph", () =>
-		hegel.test((tc) => {
-			const s: Shape = tc.draw(shape);
-			const md = compose(s);
-			const key = s.kind + (s.five ? " +five" : "");
-			counts[key] = (counts[key] ?? 0) + 1;
-			const owner = tokensOf(md).at(-1)!;
-			const out = load(truecolor).draw(md, true);
-			const cut = tailOpen(s.tail);
-			if (owner.type === "paragraph" && owner.raw.trimEnd().endsWith(s.tail) && cut >= 0) {
-				// Held: the text before the tail, without trailing spaces, and the line break before a line left empty.
-				const shown = md.slice(0, md.length - s.tail.length + cut).replace(/[ \t]+$/, "").replace(/\n$/, "");
-				expect(out).toBe(load(truecolor).draw(shown, true));
-				expect(out.replace(ESCAPE, "").endsWith(s.tail.slice(cut))).toBe(false);
-			} else if (owner.type !== "paragraph") {
-				// Text of a block: nothing waits, and the tail's last word shows as written.
-				expect(out.replace(ESCAPE, "").endsWith(s.tail.slice(s.tail.lastIndexOf(" ") + 1))).toBe(true);
-			}
-		}, { testCases: 400 }));
+		hegel.test((tc) => checkStreamed(tc.draw(shape)), { testCases: 400 }));
 
 	test("finished: the count line is its own paragraph after the body, at the end, or before a block pi keeps open to the end", () =>
 		hegel.test((tc) => {
@@ -259,9 +258,14 @@ describe("Hegel round 1: block transitions", () => {
 			expect(count).toBe(open ? 1 : tokens.length - 1);
 		}, { testCases: 400 }));
 
-	test("generator classes (finding 1) each have cases", () => {
-		console.log("block-transition cases per class:", JSON.stringify(counts));
-		for (const k of KINDS) for (const f of ["", " +five"]) expect(counts[k + f] ?? 0).toBeGreaterThan(0);
+	test("streamed: every block kind, with and without the count-line text before it, passes the check for every tail", () => {
+		const counts: Record<string, number> = {};
+		for (const kind of KINDS) for (const five of [false, true]) for (const closed of [false, true]) for (const tail of TAILS) {
+			checkStreamed({ kind, body: [], closed, gap: "\n\n", tail, five });
+			const key = kind + (five ? " +five" : "");
+			counts[key] = (counts[key] ?? 0) + 1;
+		}
+		for (const k of KINDS) for (const f of ["", " +five"]) expect(counts[k + f]).toBe(2 * TAILS.length);
 	});
 
 	for (const md of ["<pre>\n<?pi\n?>\n\n[[Do", "<pre>\n<!DOCTYPE\n>\n\n[[Do"]) {
@@ -290,7 +294,7 @@ describe("Hegel round 1: block transitions", () => {
 const CODE = ["```\n[[Done]] **Fix** [[Do", "x\n\n    [[Done]] **Fix**", "<!--\n[[Done]] **Fix** [[Do"];
 const MATH = ["$$\n[[Done]] **Fix** x\n$$", "\\[\n[[Done]] **Fix** y\n\\]"];
 const SHOWN = ["<pre>\n[[Do **Fix", "<?pi\n[[Do", "<!DOCTYPE x\n**Fix", "<![CDATA[\n[[Do", "<div>\n**Fix [[Do", "$$\nx [[Do", "\\[\n**Fix"];
-describe("Hegel round 1: source-anchored literal visibility", () => {
+describe("source-anchored literal visibility", () => {
 	test("a streamed literal shows as pi shows the raw source, or with every source character, never by the drawing of a second candidate", () =>
 		hegel.test((tc) => {
 			const group = tc.draw(gs.sampledFrom(["code", "math", "shown"]));
@@ -308,7 +312,7 @@ describe("Hegel round 1: source-anchored literal visibility", () => {
 		}));
 });
 
-describe("Hegel round 1: label length boundary", () => {
+describe("label length boundary", () => {
 	test("an unfinished pill or bold label of up to 32 characters waits; at 33 or more the source label shows", () =>
 		hegel.test((tc) => {
 			const length = tc.draw(gs.integers({ minValue: 30, maxValue: 36 }));
