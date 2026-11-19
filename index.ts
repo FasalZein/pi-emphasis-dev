@@ -21,7 +21,7 @@
 //     settings.json sets edges, icons, label color, tone colors and fill (readSettings()).
 import type { ExtensionAPI, Theme, ThemeBg, ThemeColor, ThemeToken } from "@earendil-works/pi-coding-agent";
 import { backgroundAnsi, type Color, colorToRgb, foregroundAnsi, mixColors, parseColor, type RgbColorValue, rgbColor } from "@earendil-works/pi-tui";
-import { countPlace, type EndState, mayDefine, type Range, type ReadLine, readBlocks, readMarkdown } from "./reader.ts";
+import { CJK_CHAR, countPlace, type EndState, mayDefine, type Range, type ReadLine, readBlocks, readMarkdown, runKind, strongPairs } from "./reader.ts";
 
 type Colorize = (text: string) => string;
 type PillTone = "success" | "error" | "warning" | "ask" | "danger" | "mode" | "owner" | "neutral";
@@ -406,10 +406,130 @@ const boldEnds = (palette: Palette) => {
 	return ends;
 };
 
+/** The drawn bold of one line: pi's parser pairs these delimiters, and the color around them leaves the pairing as it was. */
+interface LinePlan {
+	/** The start in the line of each drawn "**" or "__" delimiter: it opens or closes the bold color. */
+	marks: Map<number, "open" | "close">;
+	/** The line starts inside a drawn bold span that an earlier line of its paragraph opened. */
+	continued: boolean;
+}
+
+/** A character that keeps its class next to a color escape: not a space, punctuation, symbol or CJK. */
+const PLAIN_CHAR = /^[^\s\p{P}\p{S}]/u;
+const plainChar = (c: string) => c !== "" && PLAIN_CHAR.test(c) && !CJK_CHAR.test(c);
+const charAt = (text: string, at: number) => (at < text.length ? String.fromCodePoint(text.codePointAt(at)!) : "");
+const charBefore = (text: string, at: number) => {
+	if (at <= 0) return "";
+	const low = text.charCodeAt(at - 1);
+	return at >= 2 && low >= 0xdc00 && low <= 0xdfff ? text.slice(at - 2, at) : text[at - 1];
+};
+const BOLD_RUN = /\*\*|__/;
+
+/**
+ * Which bold delimiters each line draws. Only a span that pi's parser makes (strongPairs) is drawn, and only
+ * when the color escapes cannot change how pi reads any delimiter: both delimiters are runs of exactly two,
+ * the escape on each inner side leaves the run's flanking class as it was (runKind), no delimiter or email
+ * sits next to an escape, and the span holds no "](" that the escape's "[" could turn into a link. A span is
+ * read over its paragraph: consecutive prose lines that all belong to a top-level paragraph. Other prose lines
+ * (lists, quotes) draw a span only when the line alone and its run of prose lines read the same spans there.
+ * Every other run is left as written, so pi shows it as it would without the extension.
+ */
+function boldPlans(lines: string[], read: ReadLine[]): (LinePlan | undefined)[] {
+	const plans: (LinePlan | undefined)[] = [];
+	const plan = (i: number) => (plans[i] ??= { marks: new Map(), continued: false });
+	for (let i = 0; i < lines.length; ) {
+		if (read[i].kind !== "prose") {
+			i++;
+			continue;
+		}
+		let j = i;
+		let marked = false;
+		let paragraph = true;
+		for (; j < lines.length && read[j].kind === "prose"; j++) {
+			marked ||= BOLD_RUN.test(lines[j]);
+			paragraph &&= read[j].plain;
+		}
+		if (!marked) {
+			i = j;
+			continue;
+		}
+		const starts: number[] = [];
+		const literal: Range[] = [];
+		let text = "";
+		for (let k = i; k < j; k++) {
+			starts.push(text.length);
+			for (const [s, e] of read[k].literal) literal.push([text.length + s, text.length + e]);
+			text += k < j - 1 ? lines[k] + "\n" : lines[k];
+		}
+		const lineOf = (at: number) => {
+			let k = starts.length - 1;
+			while (starts[k] > at) k--;
+			return k;
+		};
+		const pairs = strongPairs(text, literal).sort((a, b) => a[0] - b[0]);
+		// Lines whose own reading differs from their run's reading: pi may read either, so nothing is drawn there.
+		const unsure = new Set<number>();
+		if (!paragraph && j - i > 1) {
+			const inRun = new Map<number, string[]>();
+			for (const [o, c] of pairs) {
+				const lo = lineOf(o);
+				const lc = lineOf(c);
+				if (lo !== lc) {
+					unsure.add(lo);
+					unsure.add(lc);
+				} else (inRun.get(lo) ?? inRun.set(lo, []).get(lo)!).push(o - starts[lo] + ":" + (c - starts[lo]));
+			}
+			for (let k = 0; k < j - i; k++) {
+				if (!BOLD_RUN.test(lines[i + k])) continue;
+				const own = strongPairs(lines[i + k], read[i + k].literal).sort((a, b) => a[0] - b[0]).map(([o, c]) => o + ":" + c).join(" ");
+				if (own !== (inRun.get(k) ?? []).join(" ")) unsure.add(k);
+			}
+		}
+		let drawnEnd = -1;
+		for (const [o, c] of pairs) {
+			// A span inside a drawn span is bold already; its close would end the outer color early.
+			if (o < drawnEnd) continue;
+			const d = text[o];
+			if (text[o - 1] === d || text[o + 2] === d || text[c - 1] === d || text[c + 2] === d) continue;
+			const innerFirst = charAt(text, o + 2);
+			const innerLast = charBefore(text, c);
+			if ("*_~".includes(innerFirst) || "*_~".includes(innerLast)) continue;
+			const inner = text.slice(o + 2, c);
+			if (inner.includes("@") || inner.includes("](")) continue;
+			const run = d + d;
+			const before = charBefore(text, o);
+			const after = charAt(text, c + 2);
+			if (runKind(before, run, innerFirst) !== runKind(before, run, "\x1b") || runKind(innerLast, run, after) !== runKind("m", run, after)) continue;
+			const lo = lineOf(o);
+			const lc = lineOf(c);
+			if (unsure.has(lo) || unsure.has(lc)) continue;
+			if (lo !== lc) {
+				// The color ends at each line end and starts again after the next line's indent: the characters
+				// there keep their class only when they are plain.
+				if (!paragraph) continue;
+				let fits = true;
+				for (let k = lo + 1; k <= lc && fits; k++) {
+					const end = starts[k] - 1;
+					const first = lines[i + k].search(/\S/);
+					fits = plainChar(charBefore(text, end)) && first >= 0 && plainChar(charAt(text, starts[k] + first));
+				}
+				if (!fits) continue;
+			}
+			plan(i + lo).marks.set(o - starts[lo], "open");
+			plan(i + lc).marks.set(c - starts[lc], "close");
+			for (let k = lo + 1; k <= lc; k++) plan(i + k).continued = true;
+			drawnEnd = c + 2;
+		}
+		i = j;
+	}
+	return plans;
+}
+
 /** Draws each line of a reply; every output line is the drawing of the input line with the same index. */
 function draw(lines: string[], palette: Palette): Drawing {
 	const { read, boundary, end } = readBlocks(lines);
 	const [open, close] = boldEnds(palette);
+	const plans = boldPlans(lines, read);
 	const pills: string[] = [];
 	let scoreboard = false;
 	let pillsAtBoundary = 0;
@@ -423,7 +543,7 @@ function draw(lines: string[], palette: Palette): Drawing {
 		if (kind === "heading") return drawHeading(line, literal);
 		if (kind !== "prose") return line;
 		if (literal.length === 0 && PILLS_ONLY.test(line)) scoreboard = true;
-		return drawProse(line, literal, palette, open, close, pills);
+		return drawProse(line, literal, palette, open, close, pills, plans[i]);
 	});
 	return { lines: out, pills, scoreboard, read, boundary, pillsAtBoundary, scoreboardAtBoundary, end };
 }
@@ -793,77 +913,105 @@ const DOLLAR_DIGIT = /\$\d/;
 const escapeProse = (text: string) =>
 	!DOLLAR_DIGIT.test(text) ? text : text.replace(DOLLAR_OR_PILL, (m: string, at: number) => (m !== "$" || opensMath(text, at) ? m : "\\$"));
 
-const ACTION_OR_PILL = new RegExp(PILL_SKIP + String.raw`|(?<!\\)(\\*)(\*\*)(${Object.keys(ACTION_ICONS).join("|")})(:\*\*)`, "gi");
-// An action lead-in ends in ":**" and opens with an unescaped "**"; a pill match is kept as written.
-const withActionIcons = (text: string) =>
-	!text.includes(":**") ? text : text.replace(ACTION_OR_PILL, (m: string, slashes?: string, before?: string, word?: string, after?: string) =>
-		word === undefined || slashes!.length % 2 === 1 ? m : slashes! + before + ACTION_ICONS[word.toLowerCase()] + ICON_SPACE + word + after,
-	);
+// An action lead-in after a drawn opening "**": the word, then ":**".
+const ACTION_AFTER = new RegExp(String.raw`^(${Object.keys(ACTION_ICONS).join("|")})(?=:\*\*)`, "i");
+const actionIcon = (rest: string) => {
+	const word = ACTION_AFTER.exec(rest)?.[1];
+	return word === undefined ? "" : ACTION_ICONS[word.toLowerCase()] + ICON_SPACE;
+};
 
 // A prose line without any of these marks draws as written: every step below leaves it unchanged.
 const PROSE_MARKS = /\[\[|\*\*|__|\$|[✓✔✗✘→├└]/;
 const GLYPHS = /[✓✔✗✘→├└]/;
+/** Characters that may be part of an emphasis or strikethrough delimiter. */
+const DELIMITER_CHARS = "*_~";
 
-function drawProse(line: string, literal: Range[], palette: Palette, open: string, close: string, drawn?: string[]): string {
-	if (!PROSE_MARKS.test(line)) return line;
+function drawProse(line: string, literal: Range[], palette: Palette, open: string, close: string, drawn?: string[], plan?: LinePlan): string {
+	if (!plan?.continued && !PROSE_MARKS.test(line)) return line;
+	const marks = plan?.marks;
 	const parts = partsOf(line, literal);
-	if (!parts[0].literal && parts[0].text.includes("**")) parts[0].text = parts[0].text.replace(LEAD_LABEL, (_, before: string, label: string, after: string) => before + withLabelIcon(label) + after);
+	const written = parts.map((part) => part.text);
+	if (!parts[0].literal && parts[0].text.includes("**")) {
+		// Only a lead label pi draws bold takes its icon.
+		const lead = LEAD_LABEL.exec(parts[0].text);
+		if (lead && marks?.get(lead[1].length - 2) === "open" && marks.get(lead[1].length + lead[2].length) === "close")
+			parts[0].text = lead[1] + withLabelIcon(lead[2]) + lead[3] + parts[0].text.slice(lead[0].length);
+	}
 	let result = "";
-	let inBold: string | undefined;
-	// After an escaped opening marker, pi's parser pairs the next same marker with the star or underscore
-	// left over: that marker opens no bold either.
-	let escaped: string | undefined;
+	let inBold = plan?.continued === true;
 	const reopen = () => (inBold ? `\x1b[1m${open}` : "");
 	// A glyph takes its color and, inside bold, the bold color again after it.
 	const glyph = (m: string, color: Colorize | undefined) => (color ? color(m) + (inBold ? open : "") : m);
-	for (const part of parts) {
+	// The start in the line of each part.
+	let at = 0;
+	for (let p = 0; p < parts.length; p++) {
+		const part = parts[p];
+		const partAt = at;
+		at += written[p].length;
 		if (part.literal) {
 			// Pi's code color ends with a foreground reset; restore the bold color after it.
 			result += inBold ? part.text + open : part.text;
 			continue;
 		}
+		const glyphs = GLYPHS.test(part.text);
+		const pattern = glyphs ? INLINE_OR_GLYPH : INLINE;
+		// The start in the line of each match, in the order the drawing meets them: the steps before the drawing
+		// add no marker, pill or glyph. Read only when the line draws bold.
+		const starts = marks?.size ? [...written[p].matchAll(pattern)].map((m) => partAt + m.index + (m[1] ?? "").length) : undefined;
+		let n = 0;
 		// Pills are read from the written text, before any escape or color is added around them.
-		const prose = withActionIcons(escapeProse(part.text.includes("]] [[") ? part.text.replace(PILL_GAP, "]]  [[") : part.text));
+		const prose = escapeProse(part.text.includes("]] [[") ? part.text.replace(PILL_GAP, "]]  [[") : part.text);
+		// A pill or glyph next to a delimiter is drawn as written: its color escapes would change how pi reads the
+		// delimiter. Next to a drawn delimiter, on the side inside the bold, it is drawn.
+		const kept = (m: string, index: number, start: number | undefined) => {
+			const before = prose[index - 1];
+			const after = prose[index + m.length];
+			return (
+				(before !== undefined && DELIMITER_CHARS.includes(before) && (start === undefined || marks!.get(start - 2) !== "open")) ||
+				(after !== undefined && DELIMITER_CHARS.includes(after) && (start === undefined || marks!.get(start + m.length) !== "close"))
+			);
+		};
 		// One pass over markers, pills and glyphs. A glyph never holds a character a marker or a pill starts
 		// with, so the matches are those of INLINE with the glyphs of the text between them.
-		// before and after: the characters around the match in the prose part.
-		const each = (before: string | undefined, after: string | undefined, match: string, slashes?: string, marker?: string, label?: string, passed?: string, failed?: string, arrow?: string, tree?: string) => {
-			if (passed !== undefined) return glyph(match, palette.passed);
-			if (failed !== undefined) return glyph(match, palette.failed);
-			if (arrow !== undefined) return glyph(match, palette.arrow);
-			if (tree !== undefined) return glyph(match, palette.tree);
+		const each = (index: number, match: string, slashes?: string, marker?: string, label?: string, passed?: string, failed?: string, arrow?: string, tree?: string) => {
+			const start = starts?.[n++];
+			if (label === undefined && marker === undefined) {
+				if (kept(match, index, start)) return match;
+				if (passed !== undefined) return glyph(match, palette.passed);
+				if (failed !== undefined) return glyph(match, palette.failed);
+				if (arrow !== undefined) return glyph(match, palette.arrow);
+				if (tree !== undefined) return glyph(match, palette.tree);
+				return match;
+			}
 			if (label !== undefined) {
-				if (!palette.pills || !label.trim()) return match;
+				if (!palette.pills || !label.trim() || kept(match, index, start)) return match;
 				drawn?.push(label);
 				return pill(label, palette) + reopen();
 			}
-			if ((slashes ?? "").length % 2 === 1) {
-				// The star or underscore left over opens only before a non-space (a left-flanking run).
-				if (!inBold) escaped = after !== undefined && !/\s/.test(after) ? marker : undefined;
-				return match;
+			const mark = start === undefined || slashes!.length % 2 === 1 ? undefined : marks!.get(start);
+			if (mark === "open") {
+				inBold = true;
+				return slashes! + marker + open + actionIcon(prose.slice(index + match.length, index + match.length + 12));
 			}
-			// The next marker closes the leftover opener only after a non-space (a right-flanking run).
-			if (!inBold && escaped === marker && before !== undefined && !/\s/.test(before) && slashes === "") {
-				escaped = undefined;
-				return match;
-			}
-			if (!inBold) {
-				inBold = marker;
-				return slashes! + marker + open;
-			}
-			if (inBold === marker) {
-				inBold = undefined;
+			if (mark === "close") {
+				inBold = false;
 				return slashes! + close + marker;
 			}
 			return match;
 		};
 		// The shorter INLINE is faster where the text holds no glyph; its callback gets only its own groups.
-		result += GLYPHS.test(prose)
-			? prose.replace(INLINE_OR_GLYPH, (m: string, s: string | undefined, k: string | undefined, l: string | undefined, p: string | undefined, f: string | undefined, a: string | undefined, t: string | undefined, at: number) =>
-					each(prose[at - 1], prose[at + m.length], m, s, k, l, p, f, a, t))
-			: prose.replace(INLINE, (m: string, s: string | undefined, k: string | undefined, l: string | undefined, at: number) => each(prose[at - 1], prose[at + m.length], m, s, k, l));
+		let text = glyphs
+			? prose.replace(INLINE_OR_GLYPH, (m: string, s: string | undefined, k: string | undefined, l: string | undefined, ps: string | undefined, f: string | undefined, a: string | undefined, t: string | undefined, index: number) =>
+					each(index, m, s, k, l, ps, f, a, t))
+			: prose.replace(INLINE, (m: string, s: string | undefined, k: string | undefined, l: string | undefined, index: number) => each(index, m, s, k, l));
+		// A line inside a span an earlier line opened takes the bold color after its indent.
+		if (p === 0 && plan?.continued) {
+			const indent = text.length - text.trimStart().length;
+			text = text.slice(0, indent) + open + text.slice(indent);
+		}
+		result += text;
 	}
-	// An unclosed span (streaming or literal asterisks) ends its color at the line end.
+	// A span that a later line closes ends its color at the line end.
 	if (inBold) result += close;
 	return result;
 }

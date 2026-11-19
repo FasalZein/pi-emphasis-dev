@@ -949,3 +949,247 @@ export function countPlace(read: ReadLine[]): number {
 	else while (end < read.length && read[end].kind === "prose" && read[end].plain) end++;
 	return end > first && read[end]?.kind === "blank" ? end + 1 : first;
 }
+
+
+// ---------------------------------------------------------------------------------------------------------------
+// Strong pairs: which "**" and "__" runs pi's parser pairs as bold. A port of the inline lexer loop of marked
+// 18.0.11 (gfm, not breaks) with the emStrong tokenizer of marked-cjk-friendly 0.1.2, as pi-tui 1.5.2 configures
+// them (components/markdown.js). The regular expressions are copied from those two packages; neither loads here.
+// Code spans, math, HTML and autolinks are the reader's literal ranges (one token each, as pi's tokenizers read
+// them). Not ported: reference links with a definition (read as text, like an undefined reference).
+// ---------------------------------------------------------------------------------------------------------------
+
+/** marked-cjk-friendly: characters that count as punctuation next to an emphasis delimiter. */
+const CJK = "\\u1100-\\u11ff\\u20a9\\u2329-\\u232a\\u2630-\\u2637\\u268a-\\u268f\\u2e80-\\u2e99\\u2e9b-\\u2ef3\\u2f00-\\u2fd5\\u2ff0-\\u303e\\u3041-\\u3096\\u3099-\\u30ff\\u3105-\\u312f\\u3131-\\u318e\\u3190-\\u31e5\\u31ef-\\u321e\\u3220-\\u3247\\u3250-\\ua48c\\ua490-\\ua4c6\\ua960-\\ua97c\\uac00-\\ud7a3\\ud7b0-\\ud7c6\\ud7cb-\\ud7fb\\uf900-\\ufaff\\ufe10-\\ufe19\\ufe30-\\ufe52\\ufe54-\\ufe66\\ufe68-\\ufe6b\\uff01-\\uffbe\\uffc2-\\uffc7\\uffca-\\uffcf\\uffd2-\\uffd7\\uffda-\\uffdc\\uffe0-\\uffe6\\uffe8-\\uffee\\u{16fe0}-\\u{16fe4}\\u{16ff0}-\\u{16ff6}\\u{17000}-\\u{18cda}\\u{18cff}-\\u{18d20}\\u{18d80}-\\u{18df2}\\u{18e00}-\\u{19191}\\u{191a0}-\\u{191d2}\\u{1aff0}-\\u{1aff3}\\u{1aff5}-\\u{1affb}\\u{1affd}-\\u{1affe}\\u{1b000}-\\u{1b128}\\u{1b132}\\u{1b150}-\\u{1b152}\\u{1b155}\\u{1b164}-\\u{1b168}\\u{1b170}-\\u{1b2fb}\\u{1d300}-\\u{1d356}\\u{1d360}-\\u{1d376}\\u{1f1ae}\\u{1f200}\\u{1f202}\\u{1f210}-\\u{1f219}\\u{1f21b}-\\u{1f22e}\\u{1f230}-\\u{1f231}\\u{1f237}\\u{1f23b}\\u{1f240}-\\u{1f248}\\u{1f260}-\\u{1f265}\\u{1f7da}\\u{20000}-\\u{3fffd}";
+export const CJK_CHAR = new RegExp(`[${CJK}]`, "u");
+const PREV_CJK = new RegExp(`^((?![*_])[\\s\\p{P}\\p{S}${CJK}])`, "u");
+const PUNCT_CJK = `(?!~)[\\p{P}\\p{S}${CJK}]`;
+const PUNCT_SPACE_CJK = `(?!~)[\\s\\p{P}\\p{S}${CJK}]`;
+const NOT_PUNCT_SPACE_CJK = `(?:[^\\s\\p{P}\\p{S}${CJK}]|~)`;
+const PUNCT_CJK_UND = `[\\p{P}\\p{S}${CJK}]`;
+const PUNCT_SPACE_CJK_UND = `[\\s\\p{P}\\p{S}${CJK}]`;
+const NOT_PUNCT_SPACE_CJK_UND = `[^\\s\\p{P}\\p{S}${CJK}]`;
+/** The right delimiter scans of marked-cjk-friendly (buildRDelimAst with the gfm classes, buildRDelimUnd). */
+const R_DELIM_AST = new RegExp(
+	`^[^_*]*?__[^_*]*?\\*[^_*]*?(?=__)|[^*]+(?=[^*])|(?!\\*)${PUNCT_CJK}(\\*+)(?=[\\s]|$)|${NOT_PUNCT_SPACE_CJK}(\\*+)(?!\\*)(?=${PUNCT_SPACE_CJK}|$)|(?!\\*)${PUNCT_SPACE_CJK}(\\*+)(?=${NOT_PUNCT_SPACE_CJK})|[\\s](\\*+)(?!\\*)(?=${PUNCT_CJK})|(?!\\*)${PUNCT_CJK}(\\*+)(?!\\*)(?=${PUNCT_CJK})|${NOT_PUNCT_SPACE_CJK}(\\*+)(?=${NOT_PUNCT_SPACE_CJK})`,
+	"gu",
+);
+const R_DELIM_UND = new RegExp(
+	`^[^_*]*?\\*\\*[^_*]*?_[^_*]*?(?=\\*\\*)|[^_]+(?=[^_])|(?!_)${PUNCT_CJK_UND}(_+)(?=[\\s]|$)|${NOT_PUNCT_SPACE_CJK_UND}(_+)(?!_)(?=${PUNCT_SPACE_CJK_UND}|$)|(?!_)${PUNCT_SPACE_CJK_UND}(_+)(?=${NOT_PUNCT_SPACE_CJK_UND})|[\\s](_+)(?!_)(?=${PUNCT_CJK_UND})|(?!_)${PUNCT_CJK_UND}(_+)(?!_)(?=${PUNCT_CJK_UND})`,
+	"gu",
+);
+/** marked's gfm emStrongLDelim, punctuation and unicodeAlphaNumeric rules, sticky instead of anchored. */
+const L_DELIM = /(?:\*+(?:((?!\*)(?!~)[\p{P}\p{S}])|([^\s*]))?)|_+(?:((?!_)(?!~)[\p{P}\p{S}])|([^\s_]))?/uy;
+const PUNCTUATION_BEFORE = /^((?![*_])[\s\p{P}\p{S}])/u;
+const ALPHANUMERIC = /[\p{L}\p{N}]/u;
+const ESCAPE = /\\([!"#$%&'()*+,\-./:;<=>?@\[\]\\^_\x60{|}~])/y;
+const ANY_PUNCTUATION = /\\[\p{P}\p{S}]/gu;
+/** marked's blockSkip: inline links, code spans and HTML tags, masked so that no delimiter inside them pairs. */
+const BLOCK_SKIP = /\[(?:[^\[\]\x60]|(?<a>\x60+)[^\x60]+\k<a>(?!\x60))*?\]\((?:\\[\s\S]|[^\\\(\)]|\((?:\\[\s\S]|[^\\\(\)])*\))*\)|(?<!\x60)()(?<b>\x60+)[^\x60]+\k<b>(?!\x60)|<(?! )[^<>]*?>/g;
+const LINK_LABEL = String.raw`(?:\[(?:\\[\s\S]|[^\[\]\\])*\]|\\[\s\S]|\x60+(?!\x60)[^\x60]*?\x60+(?!\x60)|\x60\x60+(?=\])|[^\[\]\\\x60])*?`;
+const LINK = new RegExp(
+	String.raw`!?\[(${LINK_LABEL})\]\(\s*(<(?:\\.|[^\n<>\\])+>|[^ \t\n\x00-\x1f]+|(?=\)))(?:(?:[ \t]+(?:\n[ \t]*)?|\n[ \t]*)("(?:\\"?|[^"\\])*"|'(?:\\'?|[^'\\])*'|\((?:\\\)?|[^)\\])*\)))?\s*\)`,
+	"y",
+);
+const REF = String.raw`(?!\s*\])(?:\\[\s\S]|[^\[\]\\])+`;
+const REFLINK = new RegExp(String.raw`!?\[(${LINK_LABEL})\]\[(${REF})\]|!?\[(${REF})\](?:\[\])?`, "y");
+/** pi's strict strikethrough. */
+const DEL = /(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/y;
+const BR = /( {2,}|\\)\n(?!\s*$)/y;
+const GFM_URL = /((?:[hH][tT][tT][pP][sS]?|[fF][tT][pP]):\/\/|www\.)(?:[a-zA-Z0-9\-]+\.?)+[^\s<]*|[A-Za-z0-9._+-]+(@)[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![-_])/y;
+const BACKPEDAL = /^(?:[^?!.,:;*_'"~()&]+|\([^)]*\)|&(?![a-zA-Z0-9]+;$)|[?!.,:;*_'"~)]+(?!$))+/;
+// marked's gfm inlineText rule. "protocol" is not grouped there, so text stops before any "http" or "ftp".
+const TEXT = /^(\x60+|~+|[^\x60~])(?:(?=[\x60~])|(?= {2,}\n)|(?=[a-zA-Z0-9.!#$%&'*+\/=?_\x60{\|}~-]+@)|[\s\S]*?(?:(?=[\\<!\[\x60*~_]|\b_|[hH][tT][tT][pP][sS]?|[fF][tT][pP]:\/\/|www\.|$)|[^ ](?= {2,}\n)|[^a-zA-Z0-9.!#$%&'*+\/=?_\x60{\|}~-](?=[a-zA-Z0-9.!#$%&'*+\/=?_\x60{\|}~-]+@)))/;
+/** Where pi's inline math extension may start (its startInline): text stops before it. */
+const MATH_START = /\$|\\[(\[]/g;
+
+/** A strong span pi draws: the starts of its opening and closing two-character delimiters. */
+export type StrongPair = [open: number, close: number];
+
+/** marked-cjk-friendly isPrevCharCjk: maskedSrc.length - src.length is the index at. */
+function prevIsCjk(prev: string, masked: string, at: number): boolean {
+	let cjk = PREV_CJK.test(prev);
+	if (!cjk && prev && at >= 1) {
+		let idx = at - 1;
+		let code = masked.charCodeAt(idx);
+		if (code >= 65024 && code <= 65038 && idx >= 1) code = masked.charCodeAt(--idx);
+		if ((code & 64512) === 56320 && idx >= 1) {
+			const cp = masked.codePointAt(idx - 1);
+			if (cp !== undefined && cp > 65535) cjk = (cp >= 917760 && cp <= 917999) || CJK_CHAR.test(String.fromCodePoint(cp));
+		} else cjk = CJK_CHAR.test(String.fromCharCode(code));
+	}
+	return cjk;
+}
+
+/** marked-cjk-friendly emStrong at index at of text: the token's end and its delimiter lengths, or undefined. */
+function emStrongAt(text: string, masked: string, at: number, prev: string): { end: number; strong: boolean } | undefined {
+	L_DELIM.lastIndex = at;
+	const match = L_DELIM.exec(text);
+	if (!match || !(match[1] || match[2] || match[3] || match[4])) return undefined;
+	if (match[4] && ALPHANUMERIC.test(prev)) return undefined;
+	const next = match[1] || match[3] || "";
+	if (!(!next || !prev || PUNCTUATION_BEFORE.test(prev) || prevIsCjk(prev, masked, at) || CJK_CHAR.test(next))) return undefined;
+	const lLength = [...match[0]].length - 1;
+	let delimTotal = lLength;
+	let midDelimTotal = 0;
+	const sameBefore = prev === match[0][0];
+	const endReg = match[0][0] === "*" ? R_DELIM_AST : R_DELIM_UND;
+	endReg.lastIndex = 0;
+	const clipped = masked.slice(at + lLength);
+	let r: RegExpExecArray | null;
+	while ((r = endReg.exec(clipped)) !== null) {
+		const delim = r[1] || r[2] || r[3] || r[4] || r[5] || r[6];
+		if (!delim) continue;
+		let rLength = [...delim].length;
+		let cjkAdjacent = false;
+		if (r[1] || r[2] || r[3] || r[4]) {
+			const before = String.fromCodePoint(r[0].codePointAt(0)!);
+			const after = r.index + r[0].length < clipped.length ? String.fromCodePoint(clipped.codePointAt(r.index + r[0].length)!) : "";
+			cjkAdjacent = CJK_CHAR.test(before) || CJK_CHAR.test(after);
+		}
+		const leftOnly = Boolean(r[3] || r[4]);
+		const both = Boolean(r[5] || r[6]);
+		if (leftOnly && !cjkAdjacent) {
+			delimTotal += rLength;
+			continue;
+		}
+		if (both || cjkAdjacent) {
+			if (lLength % 3 && !((lLength + rLength) % 3)) {
+				midDelimTotal += rLength;
+				continue;
+			}
+			if (sameBefore && both) break;
+		}
+		delimTotal -= rLength;
+		if (delimTotal > 0) continue;
+		rLength = Math.min(rLength, rLength + delimTotal + midDelimTotal);
+		const lastCharLength = r[0].codePointAt(0)! > 65535 ? 2 : 1;
+		return { end: at + lLength + r.index + lastCharLength + rLength, strong: Math.min(lLength, rLength) % 2 === 0 };
+	}
+	return undefined;
+}
+
+/**
+ * The strong spans pi's parser makes in inline text (a paragraph's lines joined with "\n"), at every nesting
+ * level. literal: the reader's literal ranges in text coordinates, sorted.
+ */
+export function strongPairs(text: string, literal: Range[]): StrongPair[] {
+	const pairs: StrongPair[] = [];
+	lexInline(text, 0, text.length, literal, false, pairs);
+	return pairs;
+}
+
+function lexInline(all: string, from: number, to: number, literal: Range[], inLink: boolean, pairs: StrongPair[]): void {
+	const text = all.slice(from, to);
+	const masked = text.replace(ANY_PUNCTUATION, (s) => "+".repeat(s.length)).replace(BLOCK_SKIP, (s) => "[" + "a".repeat(s.length - 2) + "]");
+	let r = 0;
+	let prev = "";
+	let lastText = false;
+	for (let i = 0; i < text.length; ) {
+		if (!lastText) prev = "";
+		lastText = false;
+		while (r < literal.length && literal[r][1] <= from + i) r++;
+		if (r < literal.length && literal[r][0] <= from + i) {
+			i = Math.min(text.length, literal[r][1] - from);
+			continue;
+		}
+		const c = text[i];
+		if (c === "\\") {
+			ESCAPE.lastIndex = i;
+			if (ESCAPE.test(text)) {
+				i += 2;
+				continue;
+			}
+		}
+		if (c === "[" || (c === "!" && text[i + 1] === "[")) {
+			LINK.lastIndex = i;
+			const link = LINK.exec(text);
+			if (link) {
+				const start = i + link[0].indexOf("[") + 1;
+				lexInline(all, from + start, from + start + link[1].length, literal, true, pairs);
+				i += link[0].length;
+				continue;
+			}
+			REFLINK.lastIndex = i;
+			if (REFLINK.test(text)) {
+				i += 1;
+				continue;
+			}
+		}
+		if (c === "*" || c === "_") {
+			const token = emStrongAt(text, masked, i, prev);
+			if (token) {
+				const width = token.strong ? 2 : 1;
+				// A link's text is drawn as written: a color escape there would end the link label.
+				if (token.strong && !inLink) pairs.push([from + i, from + token.end - 2]);
+				lexInline(all, from + i + width, from + token.end - width, literal, inLink, pairs);
+				i = token.end;
+				continue;
+			}
+		}
+		if (c === "~") {
+			DEL.lastIndex = i;
+			const del = DEL.exec(text);
+			if (del) {
+				lexInline(all, from + i + 2, from + i + 2 + del[2].length, literal, inLink, pairs);
+				i += del[0].length;
+				continue;
+			}
+		}
+		if (c === " " || c === "\\") {
+			BR.lastIndex = i;
+			const br = BR.exec(text);
+			if (br) {
+				i += br[0].length;
+				continue;
+			}
+		}
+		if (!inLink) {
+			GFM_URL.lastIndex = i;
+			const url = GFM_URL.exec(text);
+			if (url) {
+				let raw = url[0];
+				if (url[2] !== "@") {
+					let before: string;
+					do {
+						before = raw;
+						raw = BACKPEDAL.exec(raw)?.[0] ?? "";
+					} while (before !== raw);
+				}
+				if (raw.length > 0) {
+					i += raw.length;
+					continue;
+				}
+			}
+		}
+		// The text token stops before a possible math start (pi's startInline) and before a literal range.
+		let cut = r < literal.length ? Math.min(text.length, literal[r][0] - from) : text.length;
+		MATH_START.lastIndex = i + 1;
+		const math = MATH_START.exec(text);
+		if (math && math.index < cut) cut = math.index;
+		const piece = TEXT.exec(text.slice(i, cut));
+		const raw = piece ? piece[0] : text[i];
+		i += Math.max(1, raw.length);
+		if (!raw.endsWith("_")) prev = raw.slice(-1);
+		lastText = true;
+	}
+}
+
+
+/**
+ * How pi's right delimiter scan reads a run of "**" or "__" between the characters before and after it: as a
+ * left-only, right-only or both-flanking delimiter (next to CJK text: both), or not at all ("" before it: the
+ * scan starts at the run).
+ */
+export function runKind(before: string, run: string, after: string): "left" | "right" | "both" | "none" {
+	const scan = run[0] === "*" ? R_DELIM_AST : R_DELIM_UND;
+	const text = before + run + after;
+	scan.lastIndex = 0;
+	let r: RegExpExecArray | null;
+	while ((r = scan.exec(text)) !== null) {
+		if (!(r[1] || r[2] || r[3] || r[4] || r[5] || r[6])) continue;
+		if (r[5] || r[6] || CJK_CHAR.test(before) || CJK_CHAR.test(after)) return "both";
+		return r[3] || r[4] ? "left" : "right";
+	}
+	return "none";
+}
