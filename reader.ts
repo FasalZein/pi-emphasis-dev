@@ -38,10 +38,10 @@ const TABLE_DELIMITER = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|
 const PARAGRAPH_END = /^(?:\x60{3,}|~{3,}|#{1,6}(?: |$)|>|<|[-*+] +\S|1[.)] +\S)/;
 // "\\", backtick, "$", "<", and the characters of inline constructs that pi's parser (marked) tokenizes
 // before its LaTeX rule when they start earlier: "[", "]", "(", ")", "*", "_", "~", ">".
-const SPECIAL_CODES = new Uint8Array(128);
-for (const c of [0x5c, 0x60, 0x24, 0x3c, 0x5b, 0x5d, 0x28, 0x29, 0x2a, 0x5f, 0x7e, 0x3e]) SPECIAL_CODES[c] = 1;
-/** The characters of SPECIAL_CODES as one class: a regex search skips plain text faster than a loop. */
+/** The characters where the inline scan stops: code span, comment, math, escape or another construct. */
 const SPECIAL = /[\\\x60$<[\]()*_~>]/g;
+/** An email candidate's local part and its "@" (skipped when it is no email). */
+const EMAIL_HEAD = /[A-Za-z0-9._+-]*@/y;
 const WORD_CHAR = /[\p{L}\p{N}]/u;
 const SPACE = /\s/;
 /** "://", "www." or "@": a line without any of them holds no bare URL or email start. */
@@ -495,13 +495,17 @@ function readPass(lines: string[], skip?: SureFence[], definitions = true): { re
 			}
 			return "none";
 		};
+		// The first special character at or after the last search start (text.length for none). p only grows, so it
+		// stays the next one until p passes it: each line is searched once, however many URLs it holds.
+		let nextSpecial = -1;
 		for (let p = from; p < text.length; ) {
 			// Jump to the next character that may open a code span, a comment, math, an escape or a construct.
 			if (nextUrl >= 0 && nextUrl < p) nextUrl = urlStart(text, p);
-			// (Codes of 128 and above are read before the table: an index past its end is a slow load in V8.)
-			SPECIAL.lastIndex = p;
-			const special = SPECIAL.exec(text);
-			p = special ? special.index : text.length;
+			if (nextSpecial < p) {
+				SPECIAL.lastIndex = p;
+				nextSpecial = SPECIAL.exec(text)?.index ?? text.length;
+			}
+			p = nextSpecial;
 			if (nextUrl >= 0 && nextUrl < p) p = nextUrl;
 			if (p >= text.length) break;
 			if (p === nextUrl) {
@@ -515,7 +519,8 @@ function readPass(lines: string[], skip?: SureFence[], definitions = true): { re
 					continue;
 				}
 				// A failed email candidate is skipped up to its "@", so the search stays linear.
-				p = end > p ? end : text.slice(p).match(/^[A-Za-z0-9._+-]*@/)?.[0].length ? p + text.slice(p).match(/^[A-Za-z0-9._+-]*@/)![0].length : p + 1;
+				EMAIL_HEAD.lastIndex = p;
+				p = end > p ? end : EMAIL_HEAD.test(text) && EMAIL_HEAD.lastIndex > p ? EMAIL_HEAD.lastIndex : p + 1;
 				nextUrl = urlStart(text, p);
 				continue;
 			}
@@ -1871,13 +1876,13 @@ function lexInline(all: string, from: number, to: number, literal: Range[], inLi
 		if (fast) {
 			let end = text.length;
 			if (r < literal.length) end = Math.min(end, literal[r][0] - from);
+			// Before the slow window, the token ends at its start.
+			if (from + i < slow.from) end = Math.min(end, slow.from - from);
 			// marked's text rule takes a run of tildes (an unmatched strikethrough) as one token.
 			let next = i + 1;
 			if (c === "~") while (text[next] === "~") next++;
 			NEXT_SIGN.lastIndex = next;
 			const sign = NEXT_SIGN.exec(text);
-			// Before the slow window, the token ends at its start.
-			if (from + i < slow.from) end = Math.min(end, slow.from - from);
 			if (sign && sign.index < end) end = sign.index;
 			const last = text[end - 1];
 			i = end;
