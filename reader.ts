@@ -1578,7 +1578,18 @@ function prevIsCjk(prev: string, masked: string, at: number): boolean {
  * Whether marked-cjk-friendly's emStrong accepts the delimiter run as an opener before it scans for a closer, with
  * prev the character before the run and next the character after it.
  */
+const opensLeftMemo = new Map<string, boolean>();
 export function opensLeft(prev: string, run: string, next: string): boolean {
+	// The lengths make the key unambiguous; like runKind's memo, it stays small (short keys, cleared at 4096).
+	const key = prev.length + "," + run.length + ":" + prev + run + next;
+	let opens = opensLeftMemo.get(key);
+	if (opens === undefined) {
+		if (opensLeftMemo.size > 4096) opensLeftMemo.clear();
+		opensLeftMemo.set(key, (opens = readOpensLeft(prev, run, next)));
+	}
+	return opens;
+}
+function readOpensLeft(prev: string, run: string, next: string): boolean {
 	const text = run + next;
 	L_DELIM.lastIndex = 0;
 	const match = L_DELIM.exec(text);
