@@ -8,8 +8,8 @@ Tree:
 - renderer / icons -> filled Material Design circle set; setting filled | outline | none
 - renderer / icon size -> an en space (U+2002) between icon and word: Ghostty then draws the icon over two cells, about the height of the letters, in the same pill width; pi keeps icon and word on one line
 - renderer / asks -> Needs you and Decision have their own tone "ask", solid yellow
-- renderer / count line -> one pill per word, 5 or more state pills, asks first; it sits after the last block, so nothing above it moves when the reply completes
-- renderer / labels and lead-ins -> icons as for pills; color blue, theme mdLink, as the default; setting `labels` with any theme color or hex
+- renderer / count line -> one pill per state word with its count, for 5 or more state pills of at least 2 words, asks first; it sits after the last block, so nothing above it moves when the reply completes (a reply that ends inside an open fence, HTML or math block keeps it near the top)
+- renderer / labels and lead-ins -> fixed label and action glyphs (the pill icon setting does not change them); color blue, theme mdLink, as the default; setting `labels` with any theme color or hex
 - renderer / closing line of asks -> none
 - renderer / colors setting -> per tone: a pi theme color name or "#rrggbb"; fill per tone: panel | solid | text
 - rules -> a compact rule set (the Copy section below): 188 tokens by tiktoken o200k_base
@@ -21,7 +21,7 @@ Tokens:
 - 256-color terminals: theme tokens as before (panel = the tone's tool background, solid = reverse video); hex colors map to a 256 color as pi maps theme colors (pi-tui `foregroundAnsi` chooses the index: the xterm cube, or the gray ramp for near-gray colors).
 - Pills next to each other are separated by two spaces.
 Type: the terminal's font; the extension cannot change size or face. Icons are Nerd Font Material Design glyphs that all measure 599x600 units in a Nerd Font Mono cell, centred on the cap height.
-Layout: inline. The count line sits after the last block, as its own paragraph: nothing above it moves when the reply completes.
+Layout: inline. The count line sits after the last block, as its own paragraph: nothing above it moves when the reply completes. A reply that ends inside an open block keeps it near the top (see States).
 Components:
 - Pill: [edge] [icon] [en space] [word or word + detail] [edge]. No-break spaces inside the word.
 - Icon sets (filled / outline): settled check-circle, failed close-circle, blocked minus-circle, consequence alert-octagon, needs you account-circle, decision help-circle, unverified dots-circle, in progress play-circle, pending clock, partial half-circle, skipped skip-next-circle, at risk alert-circle; kinds of work: lightbulb, magnify, eye-circle, code-braces, checkbox-circle.

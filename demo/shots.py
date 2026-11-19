@@ -11,7 +11,7 @@ Each run starts its own tmux server on a private socket and keeps its session fi
 temporary directory. It never touches your own tmux sessions. At the end it stops only its own server
 and removes the temporary directory.
 """
-import html, json, pathlib, re, shlex, shutil, subprocess, tempfile, time, uuid
+import html, json, pathlib, re, shlex, subprocess, tempfile, time, uuid
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "demo/out"
@@ -66,14 +66,6 @@ def convert(ansi):
     return "".join(out)
 
 
-# One private tmux server per run: "tmux -L" names a socket, so no session on the default server is visible here.
-SOCKET = "pi-emphasis-shot-" + uuid.uuid4().hex[:8]
-
-
-def tmux(*args, **kwargs):
-    return subprocess.run(["tmux", "-L", SOCKET, "-f", "/dev/null", *args], **kwargs)
-
-
 def session(prompt, reply, work):
     """A Pi session file holding one prompt and one scripted assistant reply."""
     rows = [{"type": "session", "version": 3, "id": str(uuid.uuid4()), "timestamp": "2026-01-01T10:00:00.000Z", "cwd": str(work)}]
@@ -94,24 +86,23 @@ def session(prompt, reply, work):
 
 def shot(name, prompt, reply_file, extension=True, rows=60, cols=112):
     OUT.mkdir(parents=True, exist_ok=True)
-    work = pathlib.Path(tempfile.mkdtemp(prefix="pi-emphasis-shot-"))
-    try:
-        agent = work / "agent"
-        agent.mkdir()
-        (agent / "settings.json").write_text('{"theme":"dark","quietStartup":true}')
-        path = session(prompt, (ROOT / "demo" / reply_file).read_text(), work)
-        load = f"-e {shlex.quote(str(ROOT / 'index.ts'))}" if extension else ""
-        command = f"cd {shlex.quote(str(work))} && PI_CODING_AGENT_DIR={shlex.quote(str(agent))} COLORTERM=truecolor pi --session {shlex.quote(str(path))} -ne {load} -ns -np -nc --no-mcp --offline; sleep 60"
-        tmux("new-session", "-d", "-s", "shot", "-x", str(cols), "-y", str(rows), command, check=True)
-        time.sleep(8)
-        raw = tmux("capture-pane", "-t", "shot", "-p", "-e", capture_output=True, text=True).stdout
-    finally:
-        # Stops only the server on this run's private socket, then removes that socket file.
-        socket_path = tmux("display-message", "-p", "#{socket_path}", capture_output=True, text=True).stdout.strip()
-        tmux("kill-server", capture_output=True)
-        if socket_path:
-            pathlib.Path(socket_path).unlink(missing_ok=True)
-        shutil.rmtree(work, ignore_errors=True)
+    # Each run owns a new temporary directory, and its tmux socket lives inside it: no other tmux server is reachable.
+    with tempfile.TemporaryDirectory(prefix="pi-emphasis-shot-") as tmp:
+        work = pathlib.Path(tmp)
+        tmux = ["tmux", "-S", str(work / "tmux.sock"), "-f", "/dev/null"]
+        try:
+            agent = work / "agent"
+            agent.mkdir()
+            (agent / "settings.json").write_text('{"theme":"dark","quietStartup":true}')
+            path = session(prompt, (ROOT / "demo" / reply_file).read_text(), work)
+            load = f"-e {shlex.quote(str(ROOT / 'index.ts'))}" if extension else ""
+            command = f"cd {shlex.quote(str(work))} && PI_CODING_AGENT_DIR={shlex.quote(str(agent))} COLORTERM=truecolor pi --session {shlex.quote(str(path))} -ne {load} -ns -np -nc --no-mcp --offline; sleep 60"
+            subprocess.run([*tmux, "new-session", "-d", "-s", "shot", "-x", str(cols), "-y", str(rows), command], check=True)
+            time.sleep(8)
+            raw = subprocess.run([*tmux, "capture-pane", "-t", "shot", "-p", "-e"], capture_output=True, text=True).stdout
+        finally:
+            # Stops only the server on this run's own socket; nothing happens when it never started.
+            subprocess.run([*tmux, "kill-server"], capture_output=True)
     lines = raw.split("\n")
     plain = [re.sub(r"\x1b\[[0-9;]*m", "", line) for line in lines]
     start = next(i for i, line in enumerate(plain) if prompt in line) - 1

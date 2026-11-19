@@ -9,7 +9,7 @@ This is a fork of [pi-emphasis](https://github.com/johnlindquist/pi-emphasis) by
 - **Settings.** An optional `emphasis` block in pi's `settings.json` sets the pill ends, the icons, the label color, and the color and fill of each tone. See [Settings](#settings).
 - **No environment switches.** The four `PI_EMPHASIS_*` environment variables are gone. The rules are always on in the terminal interface.
 
-What is rewritten and what is upstream's: the compact rules, the new look, the settings and the removal of the environment switches are this fork's. The rest of this README, and the drawing code that it describes, come from upstream, corrected where the fork makes it false. Upstream's MIT notice stays in [LICENSE](LICENSE). To merge upstream changes, see [Development](#development).
+What is rewritten and what is upstream's: the compact rules, the new look, the settings, the removal of the environment switches, the block reader (`reader.ts`), the count line and the streaming cache are this fork's. The original renderer (pills, labels, bold and glyph colors) and the rest of this README come from upstream, corrected where the fork makes it false. Upstream's MIT notice stays in [LICENSE](LICENSE). To merge upstream changes, see [Development](#development).
 
 Replies you can scan. This [Pi](https://pi.dev/) extension turns `[[Done]]`, `[[Failed]]` and `[[Needs you]]` into colored pills with icons, gives headings and lead labels an icon from their word, and colors bold text, arrows and tree lines.
 
@@ -19,13 +19,13 @@ The reply above is an invented example about an imagined deploy. This is the sam
 
 ![The same reply as plain Markdown, with the pills shown as bracketed words](screenshots/without.png)
 
-It changes only what is drawn. Stored messages, copied text and HTML exports keep the original Markdown. It makes no extra model call. The `reply_style` prompt section does add input tokens to each model request: see [The rules come with it](#the-rules-come-with-it).
+It changes only what is drawn. Stored messages, copied text and HTML exports keep the original Markdown. It makes no extra model call. The `reply_style` prompt section does add input tokens to each model request in the terminal interface: see [The rules come with it](#the-rules-come-with-it).
 
 ## Requirements
 
 | You need | Why | Without it |
 |---|---|---|
-| [Pi](https://github.com/earendil-works/pi) 1.5.1 or newer, below 2 (tested on 1.5.2) | This is a Pi extension | It cannot be installed. An older Pi may load it without honoring the assistant-only registration filter |
+| [Pi](https://github.com/earendil-works/pi) 1.5.1 or newer, below 2 (tested on 1.5.2) | This is a Pi extension | Unsupported. An older Pi may load it without honoring the assistant-only registration filter |
 | A terminal that can draw [Nerd Font](https://www.nerdfonts.com/) symbols | The icons and the rounded pill ends are Nerd Font symbols | You see empty boxes or question marks. See [Set up your terminal](#set-up-your-terminal) |
 | A terminal with color | Pills are colored backgrounds | Pills are drawn in reverse video, all in one color |
 
@@ -285,15 +285,14 @@ bun run check                # types and tests, including Hegel property tests
 python3 demo/shots.py        # redraw the demo replies in a real Pi session, as HTML to screenshot
 ```
 
-To merge upstream changes, add the original repository as a remote once, then merge:
+This repository does not share upstream's git history, so upstream changes are ported by hand. To see them, add the original repository as a remote once:
 
 ```sh
 git remote add upstream https://github.com/johnlindquist/pi-emphasis
 git fetch upstream
-git merge upstream/main
-bun run check
+git log upstream/main
 ```
 
-Merge conflicts usually sit in the guidance and the switches; keep this fork's side there.
+After you port a change, run `bun run check`.
 
 `demo/` holds the two example replies. `sgr-sampler.sh` prints every terminal text style so you can see which ones your terminal draws.

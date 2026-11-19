@@ -259,13 +259,8 @@ describe("block transitions", () => {
 		}, { testCases: 400 }));
 
 	test("streamed: every block kind, with and without the count-line text before it, passes the check for every tail", () => {
-		const counts: Record<string, number> = {};
-		for (const kind of KINDS) for (const five of [false, true]) for (const closed of [false, true]) for (const tail of TAILS) {
+		for (const kind of KINDS) for (const five of [false, true]) for (const closed of [false, true]) for (const tail of TAILS)
 			checkStreamed({ kind, body: [], closed, gap: "\n\n", tail, five });
-			const key = kind + (five ? " +five" : "");
-			counts[key] = (counts[key] ?? 0) + 1;
-		}
-		for (const k of KINDS) for (const f of ["", " +five"]) expect(counts[k + f]).toBe(2 * TAILS.length);
 	});
 
 	for (const md of ["<pre>\n<?pi\n?>\n\n[[Do", "<pre>\n<!DOCTYPE\n>\n\n[[Do"]) {
