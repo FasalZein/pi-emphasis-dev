@@ -1,4 +1,4 @@
-// The layout while a reply streams the count line goes after the last block, an
+// The layout while a reply streams: the count line goes after the last block, an
 // unfinished tail (a pill, a bold label, a heading line) waits until it completes, and an action or label icon
 // is joined to its word, so it never ends a row alone. Rendering goes through pi-tui's Markdown, as pi draws it.
 import { describe, expect, test } from "bun:test";

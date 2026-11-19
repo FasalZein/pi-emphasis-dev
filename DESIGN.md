@@ -8,7 +8,7 @@ Tree:
 - renderer / icons -> filled Material Design circle set; setting filled | outline | none
 - renderer / icon size -> an en space (U+2002) between icon and word: Ghostty then draws the icon over two cells, about the height of the letters, in the same pill width; pi keeps icon and word on one line
 - renderer / asks -> Needs you and Decision have their own tone "ask", solid yellow
-- renderer / count line -> one pill per word under the first paragraph, 5 or more state pills, asks first; it sits after the last block, so nothing above it moves when the reply completes
+- renderer / count line -> one pill per word, 5 or more state pills, asks first; it sits after the last block, so nothing above it moves when the reply completes
 - renderer / labels and lead-ins -> icons as for pills; color blue, theme mdLink, as the default; setting `labels` with any theme color or hex
 - renderer / closing line of asks -> none
 - renderer / colors setting -> per tone: a pi theme color name or "#rrggbb"; fill per tone: panel | solid | text
