@@ -44,6 +44,8 @@ for (const c of [0x5c, 0x60, 0x24, 0x3c, 0x5b, 0x5d, 0x28, 0x29, 0x2a, 0x5f, 0x7
 const SPECIAL = /[\\\x60$<[\]()*_~>]/g;
 const WORD_CHAR = /[\p{L}\p{N}]/u;
 const SPACE = /\s/;
+/** "://", "www." or "@": a line without any of them holds no bare URL or email start. */
+const URL_OR_EMAIL_SIGN = /:\/\/|www\.|@/;
 // A link title (marked's title rule); it may hold line breaks.
 const LINK_TITLE = String.raw`(?:"(?:\\"?|[^"\\])*"|'(?:\\'?|[^'\\])*'|\((?:\\\)?|[^)\\])*\))`;
 // A link reference definition (marked's def rule): pi shows nothing of it. Its destination and its title may
@@ -256,11 +258,12 @@ export function readMarkdown(lines: string[]): ReadLine[] {
  * reading of lines 0..b does not depend on the lines after b, and the reading of the lines after b equals
  * the reading of those lines alone (with indexes shifted by b + 1). -1 when there is none.
  */
-export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: number; end: EndState } {
-	const first = readPass(lines);
+// definitions: false when no line holds "]:" (the caller read its text once), so no line may define a label.
+export function readBlocks(lines: string[], definitions = true): { read: ReadLine[]; boundary: number; end: EndState } {
+	const first = readPass(lines, undefined, definitions);
 	// A label that only lines in a fenced code block define links nothing for pi: read again without those
 	// lines. (Rare: only a reference used in prose with its only definition in such a fence reads twice.)
-	return first.fencedOnly ? readPass(lines, first.sureFences) : first;
+	return first.fencedOnly ? readPass(lines, first.sureFences, definitions) : first;
 }
 
 /** A top-level fence the reader is sure of: no HTML, math or container around its opening line. */
@@ -289,7 +292,7 @@ function inSureFence(lines: string[], fences: SureFence[], j: number): boolean {
 }
 
 /** One reading. skip: the sure fences of a first reading, whose lines define no label in this one. */
-function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boundary: number; end: EndState; fencedOnly: boolean; sureFences: SureFence[] } {
+function readPass(lines: string[], skip?: SureFence[], definitions = true): { read: ReadLine[]; boundary: number; end: EndState; fencedOnly: boolean; sureFences: SureFence[] } {
 	const read: ReadLine[] = [];
 	const sureFences: SureFence[] = [];
 	const skipFenced = skip !== undefined;
@@ -454,11 +457,13 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 		let unsure = inlineCarry;
 		// Position p is inside a bare URL (pi's parser links it, "$" included, up to a space). The word start
 		// moves only forward, so the check stays linear in the line.
-		const hasUrl = text.includes("://") || text.includes("www.");
+		// (One search for all three signs first: most lines hold none.)
+		const signs = URL_OR_EMAIL_SIGN.test(text);
+		const hasUrl = signs && (text.includes("://") || text.includes("www."));
 		let scanned = from;
 		let wordStart = from;
 		// The next bare URL start; outside link text, its URL is literal.
-		let nextUrl = hasUrl || text.includes("@") ? urlStart(text, from) : -1;
+		let nextUrl = hasUrl || (signs && text.includes("@")) ? urlStart(text, from) : -1;
 		const inUrl = (p: number) => {
 			if (!hasUrl) return false;
 			for (; scanned < p; scanned++) if (SPACE.test(text[scanned])) wordStart = scanned + 1;
@@ -942,7 +947,7 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 			const clean = !fence && indentedBase === undefined && !paragraph && !emptyItem && previousDepth === 0 && listColumns.length === 0;
 			// A definition gives meaning to reference links before it, so no head holds one.
 			// Lines are checked for a definition only up to a candidate boundary, each once.
-			if (clean && !definitionSeen) for (; definitionChecked < i && !definitionSeen; definitionChecked++) definitionSeen = mayDefine(lines[definitionChecked]);
+			if (clean && !definitionSeen && definitions) for (; definitionChecked < i && !definitionSeen; definitionChecked++) definitionSeen = mayDefine(lines[definitionChecked]);
 			if (clean && !definitionSeen && seen <= i && !containerMath && !mathOff && !pendingMath && !inlineCarry && !htmlParagraph && literalUntil === undefined && !discovering && !htmlEnd && htmlShow === false && lostItem === 0 && lazyItem === 0 && itemHtml === undefined) boundary = i;
 			continue;
 		}
@@ -1705,12 +1710,23 @@ function simplePairs(text: string, literal: Range[]): { pairs: StrongPair[]; cro
 	const read = (from: number, to: number, a: number, b: number): boolean => {
 		if (a === b) return true;
 		const part = text.slice(from, to);
-		const masked = MAY_SKIP.test(part) ? part.replace(BLOCK_SKIP, (s) => "[" + "a".repeat(s.length - 2) + "]") : part;
-		if (masked !== part) {
-			let stars = 0;
-			for (let q = masked.indexOf("*"); q >= 0; q = masked.indexOf("*", q + 1)) stars++;
-			if (stars !== 2 * (b - a)) return false;
+		// lexInline's masked text, read without building it: each BLOCK_SKIP match becomes "[", then "a"s, then "]"
+		// (every match is at least 2 long). Every "*" here is in a run; with no run inside a match, the masked
+		// character before a run is "]" where a match ends right before it, and the one after it is "[" where a
+		// match starts right after it; everywhere else it is the character of part.
+		let skipStarts: Set<number> | undefined;
+		let skipEnds: Set<number> | undefined;
+		if (MAY_SKIP.test(part)) {
+			BLOCK_SKIP.lastIndex = 0;
+			for (let m: RegExpExecArray | null; (m = BLOCK_SKIP.exec(part)) !== null; ) {
+				const end = m.index + m[0].length;
+				if (m[0].includes("*")) return false;
+				(skipStarts ??= new Set()).add(m.index);
+				(skipEnds ??= new Set()).add(end);
+			}
 		}
+		const before = (r: number) => (skipEnds?.has(r) ? "]" : part[r - 1]);
+		const after = (r: number) => (r + 2 >= part.length ? "" : skipStarts?.has(r + 2) ? "[" : part[r + 2]);
 		for (let k = a; k < b; ) {
 			const q = runs[k];
 			if (!opensLeft(q === from || literalEnds.has(q) ? "" : text[q - 1], "**", q + 2 < to ? text[q + 2] : "")) return false;
@@ -1718,7 +1734,7 @@ function simplePairs(text: string, literal: Range[]): { pairs: StrongPair[]; cro
 			let close = -1;
 			for (let m = k + 1; m < b; m++) {
 				const r = runs[m] - from;
-				const kind = runKind(masked[r - 1], "**", r + 2 < masked.length ? masked[r + 2] : "");
+				const kind = runKind(before(r), "**", after(r));
 				if (kind === "none") continue;
 				total += kind === "left" ? 2 : -2;
 				if (total === 0) {

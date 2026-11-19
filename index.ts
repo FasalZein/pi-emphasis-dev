@@ -481,7 +481,7 @@ function boldPlans(lines: string[], read: ReadLine[]): (LinePlan | undefined)[] 
 			return k;
 		};
 		// Tables and HTML blocks are not one inline text for pi: nothing in them is drawn.
-		if (lines.slice(i, j).some((l) => HTML_START.test(l)) || (text.includes("|") && lines.slice(i, j).some((l) => l.includes("-") && TABLE_DELIMITER.test(l)))) {
+		if ((text.includes("<") && lines.slice(i, j).some((l) => HTML_START.test(l))) || (text.includes("|") && lines.slice(i, j).some((l) => l.includes("-") && TABLE_DELIMITER.test(l)))) {
 			i = j;
 			continue;
 		}
@@ -531,6 +531,9 @@ function boldPlans(lines: string[], read: ReadLine[]): (LinePlan | undefined)[] 
 				if (own !== (inRun.get(k) ?? []).join(" ")) unsure.add(k);
 			}
 		}
+		// Read once per group: "](" at or after o is lastLink >= o; text without LINK_TEXT holds none in any span.
+		const lastLink = text.lastIndexOf("](");
+		const linkText = LINK_TEXT.test(text);
 		let drawnEnd = -1;
 		for (const [o, c] of pairs) {
 			// A span inside a drawn span is bold already; its close would end the outer color early.
@@ -541,7 +544,7 @@ function boldPlans(lines: string[], read: ReadLine[]): (LinePlan | undefined)[] 
 			const innerLast = charBefore(text, c);
 			if ("*_~".includes(innerFirst) || "*_~".includes(innerLast)) continue;
 			// An escape's "[" with a later "](" makes a link; text with a URL or email may take an escape into its target.
-			if (c + 2 > math || text.includes("](", o) || LINK_TEXT.test(text.slice(o + 2, c))) continue;
+			if (c + 2 > math || lastLink >= o || (linkText && LINK_TEXT.test(text.slice(o + 2, c)))) continue;
 			// Right after a bare URL (cut by pi at CJK punctuation) the escape would join the URL's target.
 			if (literal.some(([s, e]) => e === o && LINK_TEXT.test(text.slice(s, e)))) continue;
 			const run = d + d;
@@ -579,8 +582,9 @@ function boldPlans(lines: string[], read: ReadLine[]): (LinePlan | undefined)[] 
 }
 
 /** Draws each line of a reply; every output line is the drawing of the input line with the same index. */
-function draw(lines: string[], palette: Palette): Drawing {
-	const { read, boundary, end } = readBlocks(lines);
+// definitions: as in readBlocks.
+function draw(lines: string[], palette: Palette, definitions = true): Drawing {
+	const { read, boundary, end } = readBlocks(lines, definitions);
 	const [open, close] = boldEnds(palette);
 	const plans = boldPlans(lines, read);
 	const pills: string[] = [];
@@ -623,7 +627,9 @@ function decorate(markdown: string, palette: Palette, streaming: boolean, cache:
 	if (head) head.source = markdown;
 	// The text that lines split from, while they still do (joinDrawn).
 	let source: string | undefined = restText;
-	let drawing = draw(lines, palette);
+	// Every line drawn below is a line of restText or a prefix of one: without "]:" in it, none may define a label.
+	const definitions = restText.includes("]:");
+	let drawing = draw(lines, palette, definitions);
 	// Streaming only: an unfinished tail waits until it completes, so it never shows raw and then jumps.
 	if (streaming) {
 		const last = lines.length - 1;
@@ -643,11 +649,11 @@ function decorate(markdown: string, palette: Palette, streaming: boolean, cache:
 			lines = lines.slice(0, last);
 			source = undefined;
 			breaks = breaks?.slice(0, last - 1);
-			drawing = draw(lines, palette);
+			drawing = draw(lines, palette, definitions);
 		} else if (kept !== undefined && cut >= 0) {
 			lines = [...lines.slice(0, last), kept];
 			source = undefined;
-			drawing = draw(lines, palette);
+			drawing = draw(lines, palette, definitions);
 		}
 	}
 	const scoreboard = (head?.scoreboard ?? false) || drawing.scoreboard;
@@ -860,6 +866,7 @@ function joinLines(lines: string[], breaks?: string[]): string {
 	return out;
 }
 
+const SPACE_CHAR = /\s/;
 const HEADING_LINE = /^([ \t>]*#{1,6}[ \t]+)(.+)$/;
 /** Pi already colors headings: a heading only takes its label icon and the currency escape. */
 function drawHeading(line: string, literal: Range[]): string {
@@ -889,7 +896,11 @@ const ACTION_ICONS: Record<string, string> = {
 /** Prefix a known label with its icon, unless it already opens with a glyph. */
 function withLabelIcon(label: string): string {
 	if (OWN_ICON.test(label)) return label;
-	const word = label.replace(/[:\s]+$/, "").trim().toLowerCase();
+	// label.replace(/[:\s]+$/, "").trim(), without a regex search over a long title: the trailing colons and
+	// white space go first, then the leading white space (\s and trim() take the same characters).
+	let end = label.length;
+	while (end > 0 && (label[end - 1] === ":" || SPACE_CHAR.test(label[end - 1]))) end--;
+	const word = label.slice(0, end).trimStart().toLowerCase();
 	const icon = own(LABEL_ICONS, word) ?? (label.trimEnd().endsWith(":") ? own(ACTION_ICONS, word) : undefined);
 	return icon ? icon + ICON_SPACE + label : label;
 }
@@ -974,6 +985,8 @@ const actionIcon = (rest: string, start: number | undefined, marks: Map<number, 
 // A prose line without any of these marks draws as written: every step below leaves it unchanged.
 const PROSE_MARKS = /\[\[|\*\*|__|\$|[✓✔✗✘→├└]/;
 const GLYPHS = /[✓✔✗✘→├└]/;
+/** GLYPHS, a pill gap (PILL_GAP) or DOLLAR_DIGIT. */
+const PART_SIGNS = /[✓✔✗✘→├└]|\]\] \[\[|\$\d/;
 /** Characters that may be part of an emphasis or strikethrough delimiter. */
 const DELIMITER_CHARS = "*_~";
 const DELIMITER_IN = /[*_~]/;
@@ -1066,10 +1079,12 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
 			result += inBold ? part.text + open : part.text;
 			continue;
 		}
-		const glyphs = GLYPHS.test(part.text);
+		// One search first: a part without a glyph, a pill gap or a "$" before a digit is its own prose.
+		const plain = !PART_SIGNS.test(part.text);
+		const glyphs = !plain && GLYPHS.test(part.text);
 		const pattern = glyphs ? INLINE_OR_GLYPH : INLINE;
 		// Pills are read from the written text, before any escape or color is added around them.
-		const prose = escapeProse(part.text.includes("]] [[") ? part.text.replace(PILL_GAP, "]]  [[") : part.text);
+		const prose = plain ? part.text : escapeProse(part.text.includes("]] [[") ? part.text.replace(PILL_GAP, "]]  [[") : part.text);
 		// The start in the line of each match, when the line draws bold. Without escapes or gaps added, a match's
 		// index in prose is its index in the line, past the lead label's icon; otherwise the matches of the
 		// written part give them in order (the steps before the drawing add no marker, pill or glyph).
