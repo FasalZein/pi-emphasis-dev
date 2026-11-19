@@ -93,7 +93,7 @@ test("words that name inherited object members are no table entries", () =>
 
 test("an unknown theme color name never stops the drawing and falls back to the tone's default", () =>
 	hegel.test((tc) => {
-		const known = new Set(["success", "error", "warning", "accent", "customMessageLabel", "text", "thinkingMinimal", "dim", "mdLink"]);
+		const known = new Set(["success", "error", "warning", "accent", "customMessageLabel", "text", "thinkingMinimal", "dim", "mdLink", "mdQuote"]);
 		const strict = {
 			fg: (c: string, t: string) => { if (!known.has(c)) throw new Error("Unknown theme color: " + c); return "<" + c + ">" + t + "</>"; },
 			getFgAnsi: (c: string) => { if (!known.has(c)) throw new Error("Unknown theme color: " + c); return "\x1b[38;fg-" + c + "m"; },

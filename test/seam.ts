@@ -21,8 +21,8 @@ const PI_DEFAULT_TYPES = ["user", "assistant", "assistant-thinking"];
 export interface Loaded {
 	/** What pi hands its Markdown renderer for a message of this type after the extension's transformer. */
 	draw(markdown: string, streaming?: boolean, messageType?: string): string;
-	/** The prompt sections the extension sets before a run. */
-	sections(): Record<string, string>;
+	/** The prompt sections after the extension's handler, starting from the sections earlier handlers set. */
+	sections(start?: Record<string, string>): Record<string, string>;
 }
 
 /**
@@ -46,8 +46,8 @@ export function load(theme: unknown, emphasis?: unknown, mode = "tui"): Loaded {
 		// pi runs a transformer only on the surfaces it registered for.
 		draw: (markdown, streaming = false, messageType = "assistant") =>
 			(messageTypes ?? PI_DEFAULT_TYPES).includes(messageType) ? transform!(markdown, { messageType, isStreaming: streaming }) : markdown,
-		sections() {
-			const event: PromptEvent = { systemPromptOptions: { sections: {} } };
+		sections(start = {}) {
+			const event: PromptEvent = { systemPromptOptions: { sections: { ...start } } };
 			for (const h of handlers.before_agent_start ?? []) h(event);
 			return event.systemPromptOptions.sections;
 		},

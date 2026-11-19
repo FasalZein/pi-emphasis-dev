@@ -84,13 +84,15 @@ interface PillStyle {
 interface Palette {
 	/** Wraps bold text in a color. */
 	bold: Colorize;
-	passed?: Colorize;
-	failed?: Colorize;
-	pills?: Record<PillTone, PillStyle>;
+	passed: Colorize;
+	failed: Colorize;
+	pills: Record<PillTone, PillStyle>;
 	/** Colors for arrows and tree connectors. */
-	arrow?: Colorize;
-	tree?: Colorize;
-	edges?: Edges;
+	arrow: Colorize;
+	tree: Colorize;
+	edges: Edges;
+	/** The opening escape of pi's block quote color, restored after a pill or glyph in a quote. */
+	quote: string;
 	/** The glyph of each icon group; undefined draws no icons. */
 	icons?: Record<string, string>;
 }
@@ -244,7 +246,7 @@ const LEGACY_BG: Record<PillTone, ThemeBg> = {
 	success: "toolSuccessBg", error: "toolErrorBg", warning: "searchMatchBg", ask: "searchMatchBg", danger: "toolErrorBg", mode: "selectedBg", owner: "selectedBg", neutral: "selectedBg",
 };
 
-function createPalette(theme: Theme, settings: EmphasisSettings = DEFAULT_SETTINGS): Palette {
+function createPalette(theme: Theme, settings: EmphasisSettings): Palette {
 	const mode = theme.getColorMode();
 	const truecolor = mode === "truecolor";
 	const colors = theme.colors;
@@ -320,6 +322,7 @@ function createPalette(theme: Theme, settings: EmphasisSettings = DEFAULT_SETTIN
 		arrow: fg("accent"),
 		tree: fg("dim"),
 		edges: settings.edges,
+		quote: theme.getFgAnsi("mdQuote"),
 		icons: settings.icons === "none" ? undefined : ICON_SETS[settings.icons],
 	};
 }
@@ -590,7 +593,8 @@ function draw(lines: string[], palette: Palette): Drawing {
 		if (kind === "heading") return drawHeading(line, literal);
 		if (kind !== "prose") return line;
 		if (literal.length === 0 && PILLS_ONLY.test(line)) scoreboard = true;
-		return drawProse(line, literal, palette, open, close, pills, plans[i]);
+		const frame = quoted(line) ? (tableHeader(line, lines[i + 1]) ? QUOTED_HEADER : QUOTE) : tableHeader(line, lines[i + 1]) ? HEADER : NO_FRAME;
+		return drawProse(line, literal, palette, open, close, pills, plans[i], frame);
 	});
 	return { lines: out, pills, scoreboard, read, boundary, pillsAtBoundary, scoreboardAtBoundary, end };
 }
@@ -601,8 +605,8 @@ function draw(lines: string[], palette: Palette): Drawing {
  * readBlocks' boundary rule, drawing the head and the rest apart equals drawing the whole. A call without a
  * matching head draws the whole reply as before, so it is the reference for the reuse (test/cache.test.ts).
  */
-function decorate(markdown: string, palette: Palette, streaming = false, cache?: { head?: Head }): string {
-	let head = cache?.head;
+function decorate(markdown: string, palette: Palette, streaming: boolean, cache: { head?: Head }): string {
+	let head = cache.head;
 	// A head that ends with a CR does not fit a reply whose next character is LF: that CRLF is one line break.
 	if (head && (head.palette !== palette || markdown.length < head.length || !markdown.startsWith(head.source.slice(0, head.length)) || (markdown[head.length] === "\n" && markdown[head.length - 1] === "\r"))) head = undefined;
 	let restText = head ? markdown.slice(head.length) : markdown;
@@ -660,8 +664,8 @@ function decorate(markdown: string, palette: Palette, streaming = false, cache?:
 		let lastText = read.length - 1;
 		while (lastText >= 0 && read[lastText].kind === "blank") lastText--;
 		const atEnd = drawing.end.open || (read[lastText]?.kind === "code" && endsOpen(lines.slice(drawing.boundary + 1))) ? countPlace(read) : read.length;
-		// The common case, a count line after the whole reply with no head, joined in one pass.
-		if (!head && atEnd === read.length) out = joinDrawn(drawing.lines, lines, breaks, source) + "\n\n" + drawProse(line, [], palette, open, close);
+		// A count line after the whole reply: a cached head's drawing already ends with its line break.
+		if (atEnd === read.length) out = (head?.out ?? "") + joinDrawn(drawing.lines, lines, breaks, source) + "\n\n" + drawProse(line, [], palette, open, close);
 		else {
 			// A drawn line holds no line break, so the head's drawing splits back into its lines.
 			const headLines: { lines: string[]; breaks?: string[] } = head ? splitLines(head.out) : { lines: [""] };
@@ -669,13 +673,8 @@ function decorate(markdown: string, palette: Palette, streaming = false, cache?:
 			const lf = (n: number) => Array<string>(n).fill("\n");
 			const allBreaks = breaks || headLines.breaks ? [...(headLines.breaks ?? lf(headLines.lines.length - 1)), ...(breaks ?? lf(lines.length - 1))] : undefined;
 			// read has one entry per line of all.
-			if (atEnd === all.length) {
-				all.push("", drawProse(line, [], palette, open, close));
-				allBreaks?.push("\n", "\n");
-			} else {
-				all.splice(atEnd, 0, drawProse(line, [], palette, open, close), "");
-				allBreaks?.splice(atEnd, 0, "\n", "\n");
-			}
+			all.splice(atEnd, 0, drawProse(line, [], palette, open, close), "");
+			allBreaks?.splice(atEnd, 0, "\n", "\n");
 			out = joinLines(all, allBreaks);
 		}
 	} else out = (head?.out ?? "") + (drawn = joinDrawn(drawing.lines, lines, breaks, source));
@@ -684,7 +683,7 @@ function decorate(markdown: string, palette: Palette, streaming = false, cache?:
 	// break here, so that the head text is a prefix of this reply.
 	// A CR that ends the text may be the first half of a CRLF, but the head never ends with it: after it comes
 	// an empty last line, a blank line that is itself the boundary, so drawing.boundary is never the line before.
-	if (cache && streaming && drawing.boundary >= 0 && drawing.boundary < lines.length - 1) {
+	if (streaming && drawing.boundary >= 0 && drawing.boundary < lines.length - 1) {
 		const n = drawing.boundary + 1;
 		const next: Head = head ?? { palette, source: markdown, length: 0, out: "", read: [], pills: [], scoreboard: false };
 		// Lines 0..n-1 with their line breaks, cut from the joined text and drawing instead of joined again.
@@ -703,7 +702,7 @@ function decorate(markdown: string, palette: Palette, streaming = false, cache?:
 		next.scoreboard ||= drawing.scoreboardAtBoundary;
 		head = next;
 	}
-	if (cache) cache.head = head;
+	cache.head = head;
 	return out;
 }
 
@@ -923,16 +922,18 @@ function pill(label: string, palette: Palette): string {
 }
 
 function drawPill(label: string, palette: Palette): string {
-	const style = palette.pills![toneOf(label)];
+	const style = palette.pills[toneOf(label)];
 	// No-break spaces keep a two-word pill on one line when Pi wraps the paragraph.
 	const { icon, word } = splitLabel(label, palette.icons);
 	const shown = (icon && word ? word : word || label.trim()).replace(CURRENCY, (_, before: string) => before + "\\$").replace(/ /g, NBSP);
 	const text = icon && word ? icon + ICON_SPACE + shown : shown;
-	const edges = palette.edges ?? "round";
+	const { edges } = palette;
 	const [left, right] = style.cap ? EDGE_GLYPHS[edges] : ["", ""];
 	const pad = style.cap && edges === "sharp" ? NBSP : "";
-	const capL = left ? `${style.cap}${left}\x1b[39m` : "";
-	const capR = right ? `${style.cap}${right}\x1b[39m` : "";
+	// A cap's escape may open faint text (a faint theme color): the cap closes it with the foreground.
+	const capEnd = resetsWeight(style.cap) === false ? "\x1b[22;39m" : "\x1b[39m";
+	const capL = left ? `${style.cap}${left}${capEnd}` : "";
+	const capR = right ? `${style.cap}${right}${capEnd}` : "";
 	return `${capL}${style.label}\x1b[1m${pad}${text}${pad}\x1b[22;27m\x1b[39m\x1b[49m${capR}`;
 }
 
@@ -978,7 +979,64 @@ const DELIMITER_IN = /[*_~]/;
 /** A character that may be part of an email address's local part (marked's GFM email rule). */
 const EMAIL_CHAR = /[A-Za-z0-9._+-]/;
 
-function drawProse(line: string, literal: Range[], palette: Palette, open: string, close: string, drawn?: string[], plan?: LinePlan): string {
+/**
+ * The styles pi draws around a prose line's text that a pill or glyph's closing escapes end: a block quote's
+ * color, and a table header's bold. A line takes the quote color when it opens with ">" after list markers and no
+ * list marker follows (pi's list bullet ends the quote color on its line). A quote's lazy continuation line (no
+ * ">") is not recognized and keeps the reset.
+ */
+interface Frame {
+	quote: boolean;
+	header: boolean;
+}
+const NO_FRAME: Frame = { quote: false, header: false };
+const QUOTE: Frame = { quote: true, header: false };
+const HEADER: Frame = { quote: false, header: true };
+const QUOTED_HEADER: Frame = { quote: true, header: true };
+const QUOTE_MARKERS = /^(?: {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+)*(?: {0,3}>[ \t]?)+/;
+const LIST_START = /^[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/;
+const quoted = (line: string) => {
+	const markers = QUOTE_MARKERS.exec(line);
+	return markers !== null && !LIST_START.test(line.slice(markers[0].length));
+};
+/** A table row's cells after its quote and list markers: GFM splits at each unescaped "|" outside the outer pipes. */
+const cellCount = (row: string) =>
+	row
+		.replace(/^[ \t>]*(?:(?:[-*+]|\d+[.)])[ \t]+)*/, "")
+		.trim()
+		.replace(/^\|/, "")
+		.replace(/(?<!\\)\|$/, "")
+		.split(/(?<!\\)\|/).length;
+/** Whether line is a GFM table's header row: the next line is a delimiter row with as many cells. */
+const tableHeader = (line: string, next: string | undefined) =>
+	next !== undefined && line.includes("|") && next.includes("-") && TABLE_DELIMITER.test(next) && cellCount(line) === cellCount(next);
+
+/**
+ * Whether escapes end with intensity reset (SGR 22 or 0: true), set (SGR 1 or 2: false) or untouched (undefined).
+ * The color parameters of SGR 38, 48 and 58 are skipped.
+ */
+function resetsWeight(escapes: string): boolean | undefined {
+	let reset: boolean | undefined;
+	for (const m of escapes.matchAll(/\x1b\[([0-9;]*)m/g)) {
+		const ps = m[1].split(";");
+		for (let k = 0; k < ps.length; k++) {
+			const p = ps[k];
+			if (p === "38" || p === "48" || p === "58") k += ps[k + 1] === "2" ? 4 : 2;
+			else if (p === "22" || p === "0" || p === "") reset = true;
+			else if (p === "1" || p === "2") reset = false;
+		}
+	}
+	return reset;
+}
+/** Memo of whether a glyph color's escapes end with an intensity reset (a faint theme color closes with SGR 22). */
+const glyphResetMemo = new WeakMap<Colorize, boolean>();
+const glyphResets = (color: Colorize) => {
+	let reset = glyphResetMemo.get(color);
+	if (reset === undefined) glyphResetMemo.set(color, (reset = resetsWeight(color("")) === true));
+	return reset;
+};
+
+function drawProse(line: string, literal: Range[], palette: Palette, open: string, close: string, drawn?: string[], plan?: LinePlan, frame = NO_FRAME): string {
 	if (!plan?.continued && !PROSE_MARKS.test(line)) return line;
 	const marks = plan?.marks;
 	const parts = partsOf(line, literal);
@@ -998,9 +1056,10 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
 	}
 	let result = "";
 	let inBold = plan?.continued === true;
-	const reopen = () => (inBold ? `\x1b[1m${open}` : "");
-	// A glyph takes its color and, inside bold, the bold color again after it.
-	const glyph = (m: string, color: Colorize | undefined) => (color ? color(m) + (inBold ? open : "") : m);
+	// After a pill or glyph, the styles its closing escapes ended: the quote color, the bold weight of a bold span or
+	// table header (after an intensity reset), and the bold color.
+	const restore = (weightReset: boolean) => (frame.quote ? palette.quote : "") + (weightReset && (inBold || frame.header) ? "\x1b[1m" : "") + (inBold ? open : "");
+	const glyph = (m: string, color: Colorize) => color(m) + restore(glyphResets(color));
 	// The start in the line of each part.
 	let at = 0;
 	for (let p = 0; p < parts.length; p++) {
@@ -1052,9 +1111,10 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
 			}
 			if (label !== undefined) {
 				// A label with a delimiter character stays as written: pi may pair it with a delimiter outside the pill.
-				if (!palette.pills || !label.trim() || DELIMITER_IN.test(label) || kept(match, index, start)) return match;
+				if (!label.trim() || DELIMITER_IN.test(label) || kept(match, index, start)) return match;
 				drawn?.push(label);
-				return pill(label, palette) + reopen();
+				// A pill ends with an intensity reset (SGR 22).
+				return pill(label, palette) + restore(true);
 			}
 			const mark = start === undefined || slashes!.length % 2 === 1 ? undefined : marks!.get(start);
 			if (mark === "open") {
@@ -1086,7 +1146,6 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
 
 /**
  * The reply_style section content. Pi wraps a section as <reply_style>\n…\n</reply_style>.
- * This is rule set c4g of the 2026-11-18 rules round (310 tokens on cpa/claude-opus-5-5, see DESIGN.md).
  * Every kind, pill, lead-in and consequence word here must stay a known word of the tables above
  * (test/reply-style.test.ts checks this).
  */
@@ -1113,10 +1172,10 @@ export default function emphasis(pi: ExtensionAPI) {
 		cache.head = undefined;
 	});
 	// The rules travel with the renderer: only a session that draws pills is told to write them.
+	// Outside the terminal interface the sections stay as earlier handlers left them.
 	pi.on("before_agent_start", (event) => {
-		const sections = (event.systemPromptOptions.sections ??= {});
-		if (currentTheme) sections.reply_style = REPLY_STYLE;
-		else delete sections.reply_style;
+		if (!currentTheme) return;
+		(event.systemPromptOptions.sections ??= {}).reply_style = REPLY_STYLE;
 	});
 	pi.registerMarkdownTransformer(
 		(markdown, context) => {
