@@ -26,13 +26,13 @@ export function linkSpans(md: string): [target: string, caption: string][] {
 
 // A drawn pill as the terminal shows it: an optional edge, the icon, an en space, the label (words joined with
 // no-break spaces), an optional edge. It is written back as [[label]], the only visual change the drawing may make.
-const DRAWN_PILL = /[\ue0b4\ue0b6\u2590\u258c]?(?:[\ue000-\uf8ff]|[\u{f0000}-\u{ffffd}])\u2002([^\ue0b4\ue0b6\u2590\u258c\s]+(?:\u00a0[^\ue0b4\ue0b6\u2590\u258c\s]+)*)[\ue0b4\ue0b6\u2590\u258c]?( *)/gu;
+const DRAWN_PILL = /( *)[\ue0b4\ue0b6\u2590\u258c]?(?:[\ue000-\uf8ff]|[\u{f0000}-\u{ffffd}])\u2002([^\ue0b4\ue0b6\u2590\u258c\s]+(?:\u00a0[^\ue0b4\ue0b6\u2590\u258c\s]+)*)[\ue0b4\ue0b6\u2590\u258c]?( *)/gu;
 /** What the terminal prints of pi's rendering of md, with each drawn pill written back as "[[label]]". */
 export function shownText(md: string): string {
-	// The space after a drawn pill may be doubled (its padding): it counts as one.
+	// The space before and after a drawn pill may be doubled (the gap between pills): it counts as one.
 	return piRender(md)
 		.replace(CONTROL, "")
-		.replace(DRAWN_PILL, (_, label: string, space: string) => "[[" + label.replace(/\u00a0/g, " ") + "]]" + (space ? " " : ""));
+		.replace(DRAWN_PILL, (_, before: string, label: string, space: string) => (before ? " " : "") + "[[" + label.replace(/\u00a0/g, " ") + "]]" + (space ? " " : ""));
 }
 /** The marked pills ("[[Done p3q]]") of md. */
 export const markedIds = (md: string) => [...new Set([...md.matchAll(/p\d+q/g)].map((m) => m[0]))];
@@ -40,6 +40,10 @@ export const markedIds = (md: string) => [...new Set([...md.matchAll(/p\d+q/g)].
 export function drawnIds(ext: Loaded, md: string): boolean[] {
 	const shown = piRender(ext.draw(md)).replace(CONTROL, "");
 	return markedIds(md).map((id) => new RegExp(String.raw`(?:[\ue000-\uf8ff]|[\u{f0000}-\u{ffffd}])\u2002Done\u00a0${id}`, "u").test(shown));
+}
+/** The number of drawn marked pills (each occurrence) in the decorated reply. */
+export function drawnCount(ext: Loaded, md: string): number {
+	return [...piRender(ext.draw(md)).replace(CONTROL, "").matchAll(/(?:[\ue000-\uf8ff]|[\u{f0000}-\u{ffffd}])\u2002Done\u00a0p\d+q/gu)].length;
 }
 /** The states the count line counts, each with its number, sorted, or [] when the reply has no count line. */
 export function tallied(ext: Loaded, md: string): string[] {

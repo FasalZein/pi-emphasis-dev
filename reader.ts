@@ -501,7 +501,15 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 					const label = opens.pop();
 					if (label && !label.dead && !asWritten()) {
 						let end: [number, number] | undefined;
-						if (text[p + 1] === "(") end = targetEnd(i, p + 1, multiline);
+						if (text[p + 1] === "(") {
+							end = targetEnd(i, p + 1, multiline);
+							// Link-shaped text whose target the reader cannot read: a pill's escapes there may make a link or
+							// change how pi reads the text after it, so it is left as written up to the first ")".
+							if (!end) {
+								const close = text.indexOf(")", p + 2);
+								literal.push([label.image ? label.at - 1 : label.at, close > 0 ? close + 1 : p + 2]);
+							}
+						}
 						else if (text[p + 1] === "[") {
 							// A full reference link [text][ref] or a collapsed one [ref][].
 							const close = labelEnd(text, p + 2);
@@ -763,7 +771,7 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 			// A definition gives meaning to reference links before it, so no head holds one.
 			// Lines are checked for a definition only up to a candidate boundary, each once.
 			if (clean && !definitionSeen) for (; definitionChecked < i && !definitionSeen; definitionChecked++) definitionSeen = mayDefine(lines[definitionChecked]);
-			if (clean && !definitionSeen && seen <= i && !containerMath && !mathOff && !pendingMath && !inlineCarry && !htmlParagraph && literalUntil === undefined && !discovering && !htmlEnd) boundary = i;
+			if (clean && !definitionSeen && seen <= i && !containerMath && !mathOff && !pendingMath && !inlineCarry && !htmlParagraph && literalUntil === undefined && !discovering && !htmlEnd && htmlShow === false) boundary = i;
 			continue;
 		}
 		// This line is in the HTML block of the lines before it; the end marker's line is the block's last.
