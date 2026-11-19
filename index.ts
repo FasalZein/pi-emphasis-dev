@@ -415,6 +415,8 @@ interface LinePlan {
 	marks: Map<number, "open" | "close">;
 	/** The line starts inside a drawn bold span that an earlier line of its paragraph opened. */
 	continued: boolean;
+	/** The INLINE matches of each part of the line as written (partsOf; none for a literal part), when boldPlans read them. */
+	inline?: (RegExpExecArray[] | undefined)[];
 }
 
 /** A character that keeps its class next to a color escape: not a space, punctuation, symbol or CJK. */
@@ -496,16 +498,24 @@ function boldPlans(lines: string[], read: ReadLine[]): (LinePlan | undefined)[] 
 		// delimiter inside a pill or literal range would never be drawn.
 		// Read per line when a span there is about to be planned.
 		const visitedSets: Set<number>[] = [];
+		// The matches read here, handed to drawProse with the line's plan so it does not read them again.
+		const inlineOf: (RegExpExecArray[] | undefined)[][] = [];
 		const visited = (k: number) => {
 			let set = visitedSets[k];
 			if (set) return set;
 			set = visitedSets[k] = new Set<number>();
+			const inline: (RegExpExecArray[] | undefined)[] = (inlineOf[k] = []);
 			let at = 0;
 			for (const part of partsOf(lines[i + k], read[i + k].literal)) {
 				if (!part.literal) {
+					const matches: RegExpExecArray[] = [];
 					INLINE.lastIndex = 0;
-					for (let m: RegExpExecArray | null; (m = INLINE.exec(part.text)) !== null; ) if (m[2] !== undefined && m[1].length % 2 === 0) set.add(at + m.index + m[1].length);
-				}
+					for (let m: RegExpExecArray | null; (m = INLINE.exec(part.text)) !== null; ) {
+						matches.push(m);
+						if (m[2] !== undefined && m[1].length % 2 === 0) set.add(at + m.index + m[1].length);
+					}
+					inline.push(matches);
+				} else inline.push(undefined);
 				at += part.text.length;
 			}
 			return set;
@@ -576,6 +586,7 @@ function boldPlans(lines: string[], read: ReadLine[]): (LinePlan | undefined)[] 
 			for (let k = lo + 1; k <= lc; k++) plan(i + k).continued = true;
 			drawnEnd = c + 2;
 		}
+		for (let k = 0; k < j - i; k++) if (inlineOf[k] && plans[i + k]) plans[i + k]!.inline = inlineOf[k];
 		i = j;
 	}
 	return plans;
@@ -1146,10 +1157,22 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
 		// (An exec loop: the same pieces as prose.replace(pattern, each), with no call from the replace builtin per match.)
 		let text = "";
 		let done = 0;
-		pattern.lastIndex = 0;
-		for (let m: RegExpExecArray | null; (m = pattern.exec(prose)) !== null; ) {
-			text += prose.slice(done, m.index) + (glyphs ? each(m.index, m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7]) : each(m.index, m[0], m[1], m[2], m[3]));
-			done = m.index + m[0].length;
+		// A plain part is its own prose, so boldPlans' matches of the written part are the matches of prose, past the
+		// lead label's icon: the icon (a private-use glyph and an en space) starts no match and is no backslash.
+		const known = plain ? plan?.inline?.[p] : undefined;
+		if (known) {
+			const shift = p === 0 ? iconLength : 0;
+			for (const m of known) {
+				const index = shift > 0 && m.index >= iconAt ? m.index + shift : m.index;
+				text += prose.slice(done, index) + each(index, m[0], m[1], m[2], m[3]);
+				done = index + m[0].length;
+			}
+		} else {
+			pattern.lastIndex = 0;
+			for (let m: RegExpExecArray | null; (m = pattern.exec(prose)) !== null; ) {
+				text += prose.slice(done, m.index) + (glyphs ? each(m.index, m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7]) : each(m.index, m[0], m[1], m[2], m[3]));
+				done = m.index + m[0].length;
+			}
 		}
 		text += prose.slice(done);
 		// A line inside a span an earlier line opened takes the bold color after its indent.
