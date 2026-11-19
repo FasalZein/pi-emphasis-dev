@@ -51,6 +51,20 @@ const BOUNDARIES: string[] = ["text\n<PRE>\n~~~\n[[Done p0q]]\n~~~","text\n<DIV>
 // After unsure pending math no HTML block opens; a backtick in HTML text opens no code span; a list item that a
 // blank line and a quote ended is not followed further.
 BOUNDARIES.push("x $$\n\n<pre>\nx <!-- c\n\nStatus [[Done p46q]]", "<pre>\na `b\n[[Done p47q]]\nc` d\n</pre>", "- x\n\n> ```\n> a\n> ```\n\n\t```\n\tb\n\n\t```\n\n- S [[Done p48q]]");
+// A comment on an HTML block's opening line, in HTML text read as indented code, or after a backslash; the
+// order of "-->" and the end marker on the block's last line; the block boundary after that line.
+BOUNDARIES.push(
+	"<pre><!-- x\n[[Done p50q]]\n-->\n</pre>",
+	"<div> <!-- x\n[[Done p51q]]\n-->\n\n",
+	"<?x <!-- x\n[[Done p52q]]\n-->\n?>",
+	"<![CDATA[ <!-- x\n[[Done p53q]]\n-->\n]]>",
+	"<pre>\n# h\n    x\n    text <!-- c\n[[Done p54q]]\n-->\n</pre>",
+	"<pre>\n\\<!-- [[Done p55q]] -->\n</pre>",
+	"<pre>\nx <!-- y\n</pre> --> [[Done p56q]]",
+	"<pre>\nx <!-- c\n--> </pre> <!-- y\n\nStatus [[Done p57q]]",
+	"<pre>\nx <!-- c\n--> </pre>\n    [[Done p58q]]\n$$\n[[Done p59q]]\n$$",
+	"<pre>\n# </pre>\n$$\n[[Done p60q]]\n$$",
+);
 for (const md of BOUNDARIES) test(`every pill as pi shows it in ${JSON.stringify(md)}`, () => expectPillsAsPi(ext, md));
 
 // Limit inputs with the drawing of e90277b per pill (in order of first occurrence).

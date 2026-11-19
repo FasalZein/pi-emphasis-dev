@@ -593,6 +593,11 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 				p = q;
 				continue;
 			}
+			// In HTML text a backslash escapes nothing: pi-tui hides a comment after it too.
+			if (c === "\\" && htmlShown && text[p + 1] === "<") {
+				p++;
+				continue;
+			}
 			if (c === "\\" || c === "$") {
 				// Only pending math (no closing mark on the line) may make pi show the rest as written.
 				if (inContainer && !containerMath && !htmlParagraph && (c === "$" || text[p + 1] === "(" || text[p + 1] === "[") && inlineMathEnd(text, p) === PENDING) containerMath = true;
@@ -848,12 +853,18 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 				// A comment in an HTML block of type 6 or 7 ends at its blank line (marked's: spaces and tabs only),
 				// which the blank line branch reads.
 				if (comment.html === "flow" && /^[ \t]*$/.test(lines[i])) comment = undefined;
-				else if (comment.html !== false && close >= 0 && (marker < 0 || close < marker)) {
+				else if (comment.html !== false && close >= 0) {
 					// pi-tui hides each comment of the HTML block's text: after this one's end the text shows, up to
-					// the next comment, which may go on over the next lines.
-					comment = commentOpenAt(lines[i], close + 3) >= 0 ? comment : undefined;
+					// the next comment, which may go on over the next lines. On the block's last line (its end marker
+					// before or after the "-->") the HTML token ends with the line: a later comment ends there too.
+					comment = marker < 0 && commentOpenAt(lines[i], close + 3) >= 0 ? comment : undefined;
 					htmlShown = true;
 					push({ kind: "prose", literal: mergeRanges([[0, close + 3], ...inline(i, close + 3, false)]), plain: false }, i);
+					// The HTML token's last line at top level: the next line starts a new block.
+					if (marker >= 0 && depth === 0 && listColumns.length === 0 && htmlShownEnd === i) {
+						endTopBlock(i);
+						paragraph = false;
+					}
 					continue;
 				} else {
 					if (marker >= 0 || close >= 0) {
@@ -883,6 +894,8 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 					htmlShow = false;
 					htmlShownEnd = i;
 				} else if (htmlShow === "flow" && /^[ \t]*$/.test(lines[i])) htmlShow = false;
+				// In the HTML block pi shows this line as HTML text: a comment that opens on it goes on.
+				if (htmlShow !== false && !comment && commentOpenAt(lines[i], 0) >= 0) comment = { depth: 0, base: 0, line: i, item: 0, onMarker: false, html: htmlShow };
 				const again = lostItem > 0 && indent - lostItem <= 3 ? body.match(FENCE_OPEN) : null;
 				if (again && !(again[1][0] === "\x60" && again[2].includes("\x60"))) {
 					fence = { char: again[1][0], length: again[1].length, base: 0, depth, line: i, chain: true, item: 0, onMarker: false };
@@ -1187,6 +1200,8 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 			pendingMath = false;
 			inlineCarry = false;
 			push({ kind: "heading", literal: literalOf(i, false), plain }, i);
+			// The last line of a top-level HTML block of types 1, 3-5: the next line starts a new block.
+			if (htmlShownEnd === i && plain) endTopBlock(i);
 			continue;
 		}
 		// An empty list item holds no paragraph yet.
@@ -1219,6 +1234,14 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 			} else if ((interrupts && (fresh ? HTML_FLOW_LINE : HTML_FLOW_LINE_CASED).test(line)) || (fresh && HTML_TAG_LINE.test(content))) {
 				htmlShown = true;
 				htmlShow = "flow";
+			}
+			// A comment that opens on the HTML block's opening line and does not end on it goes on in the block.
+			if (htmlShown && htmlShow !== false && !comment) {
+				const at = commentOpenAt(lines[i], 0);
+				if (at >= 0) {
+					comment = { depth: 0, base: 0, line: i, item: 0, onMarker: false, html: htmlShow };
+					rawOpen = { line: i, at };
+				}
 			}
 		}
 		if (content.startsWith("<") && !plain && !itemHtmlLine && (!wasParagraph || newItem || innerDepth > 0)) {
