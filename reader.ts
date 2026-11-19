@@ -1108,7 +1108,7 @@ interface Lexed {
 const spans = (text: string, start: number, end: number) => text.slice(start, end).includes("\n");
 
 /** Text where a bare URL or email may start: only there do text tokens end at places other than NEXT_SIGN. */
-const URL_SIGN = /@|:\/\/|www\./;
+const URL_SIGN = /[A-Za-z0-9._+-]@[a-zA-Z0-9-_]+\.|:\/\/|www\./;
 /** The characters where a token other than text may start, without URLs: escape, link, emphasis, strikethrough. */
 const NEXT_SIGN = /[\\\[!*_~]/g;
 
