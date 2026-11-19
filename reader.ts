@@ -313,9 +313,8 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 	let fence: { char: string; length: number; base: number; depth: number; line: number; chain: boolean; item: number; onMarker: boolean } | undefined;
 	// A block HTML comment that has not ended yet, in its container; html: the HTML block it opened in.
 	let comment: { depth: number; base: number; line: number; item: number; onMarker: boolean; html: false | "flow" | RegExp } | undefined;
-	// A line in a block quote or a list item opened with "<": pi may read an HTML block there, which the reader
-	// does not follow. Cleared at the next top-level line.
-	let containerHtml = false;
+	// A comment that opened inside the text of an HTML block on line, at column at: the line is literal from there.
+	let rawOpen: { line: number; at: number } | undefined;
 	// The content column of a list item the reader stopped following at a change of quote depth; 0 when none.
 	let lostItem = 0;
 	// The content column of an outer list item that pi may keep lazily after a line left a fence in a nested
@@ -324,6 +323,13 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 	// The line at which the last fence was left (its container ended).
 	let leftAt = -1;
 	let leftBase = 0;
+	// The line that left a fence in a block quote: pi may keep it in the quote as a lazy paragraph line.
+	let leftQuoteAt = -1;
+	// The line of a sure pending display math mark (pi shows the rest as written); -1 when none.
+	let writtenFrom = -1;
+	// An HTML block that opened a block quote's or a list item's content, as marked reads it there: its lines are
+	// HTML text (no fence opens) up to its end marker (types 1, 3-5), a blank line (types 6, 7) or the container's end.
+	let itemHtml: { depth: number; base: number; line: number; item: number; onMarker: boolean; end: RegExp | "flow" } | undefined;
 	let indentedBase: number | undefined;
 	let paragraph = false;
 	// The first line of the open paragraph: a setext underline makes its lines a heading.
@@ -635,6 +641,11 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 			}
 			let q = p;
 			while (!comment && text[q] === "\x60") q++;
+			// pi shows an HTML block's text as written: a backtick there opens no code span.
+			if (!comment && htmlShown) {
+				p = q;
+				continue;
+			}
 			const ender = comment ? "-->" : text.slice(p, q);
 			const find = (s: string, from: number) => (comment ? s.indexOf("-->", from) : backtickRun(s, from, q - p));
 			const close = find(text, comment ? p + 4 : q);
@@ -642,6 +653,12 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 				literal.push([p, close + ender.length]);
 				p = close + ender.length;
 				continue;
+			}
+			// In an HTML block that goes on after this line, the comment is a block state (rawOpen): the lines up
+			// to its end are read there.
+			if (comment && htmlShown && htmlShow !== false) {
+				literal.push([p, text.length]);
+				break;
 			}
 			// An unclosed code span or comment may close on a later line of its paragraph, up to the next
 			// blank line. Past a line that may open another block, pi may read that line without it.
@@ -668,16 +685,6 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 			if (multiline) see(k);
 			// In an HTML block of types 1, 3-5, which holds blank lines, pi hides the comment up to its "-->" or
 			// the block's end marker, over blank lines: those lines are literal.
-			const block = comment && multiline ? (htmlShow instanceof RegExp ? htmlShow : htmlEnd) : undefined;
-			if (block) {
-				let e = k;
-				while (e < lines.length - 1 && !lines[e].includes("-->") && !block.test(lines[e])) e++;
-				see(e + 1);
-				literal.push([p, text.length]);
-				const until = untilNow();
-				if (e > i && e < lines.length && (!until || e > until.line)) literalUntil = { line: e, end: lines[e].length, uncertain: true };
-				break;
-			}
 			if (comment) {
 				// Never closed: pi's parser hides the rest of the paragraph, or shows "<!--" as text and reads
 				// on. Nothing after it is drawn up to the paragraph's end.
@@ -716,16 +723,29 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 		discovering = false;
 		return mergeRanges([...after, ...alone]);
 	};
+	/** The current top-level line ends its HTML or comment block for sure: the next line starts a new block. */
+	const endTopBlock = (i: number) => {
+		blockEnd = i;
+		htmlEnd = undefined;
+		htmlFlow = false;
+		htmlParagraph = false;
+	};
 	const push = (line: ReadLine, i: number) => {
 		if (line.kind !== "prose") {
 			pendingMath = false;
 			inlineCarry = false;
 		}
 		if (line.kind !== "prose" && line.kind !== "heading" && literalUntil?.line === i) literalUntil = undefined;
+		if (rawOpen?.line === i && line.kind !== "code" && line.kind !== "blank") line = { ...line, literal: mergeRanges([...line.literal, [rawOpen.at, lines[i].length]]) };
 		read.push(line);
 	};
 
 	for (let i = 0; i < lines.length; i++) {
+		// After pending display math pi shows every line as written: prose, nothing literal.
+		if (writtenFrom >= 0) {
+			push(lines[i].trim() ? { kind: "prose", literal: [], plain: false } : { kind: "blank", literal: [], plain: false }, i);
+			continue;
+		}
 		// Fast path: a top-level fence (no quote, no list) ends only at a closing line, whose first character after
 		// spaces and tabs is the fence character (no container can end it: see "left" below). Every other line is
 		// code. Not taken in an open HTML block of types 1, 3-5, whose end marker each line is tested for below.
@@ -758,32 +778,38 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 		 * a list item, a thematic break) ends the item, or any such line after a blank line, an opening fence, a
 		 * heading, a thematic break or a line indented 4 more than the item's content.
 		 */
-		const leftContainer = (s: { depth: number; base: number; line: number; item: number; onMarker: boolean }, opensFence: boolean) => {
+		const leftContainer = (s: { depth: number; base: number; line: number; item: number; onMarker: boolean; lazy?: boolean }, opensFence: boolean) => {
 			/** The list item with content column base ends at this line, which is indented less. */
-			const itemEnds = (base: number, afterOpener: boolean) => {
+			const itemEnds = (base: number, quotes: number) => {
 				const l = Math.min(3, base - 1);
 				if (indent <= l && (ITEM_BREAK.test(body) || thematicBreak(body))) return true;
-				// The line before, as marked sees it: its text after the item's content column. On the line of the
-				// item's marker that is the text after the marker, spaces included.
-				if (i - 1 === s.line && s.onMarker) return afterOpener;
-				const before = blockOf(lines[i - 1]);
-				if (!before.body.trim() || before.indent - base >= 4) return true;
-				const h = " ".repeat(Math.max(0, before.indent - base)) + before.body;
-				return new RegExp(`^ {0,${l}}(?:\x60\x60\x60|~~~|#)`).test(h) || (before.indent - base <= l && thematicBreak(before.body));
+				// The line before, as marked sees it: its text after the item's content column (also for a lazy line
+				// indented less). On the line of the item's marker it is the text after the marker, spaces included.
+				const full = afterQuotes(lines[i - 1], quotes);
+				return endsItemAfter(full, i - 1 === s.line && s.onMarker ? afterMarker(full) : full.slice(base), base);
 			};
 			if (depth < s.depth) {
-				// A block in a quote that is in a list item, or in a list item in a quote: pi's list item may take the
-				// line after the quote (lazily or indented), and with it the block. The reader keeps the line in the
-				// block until the item ends (where pi ends the quote's block instead, this is over-protection).
-				const item = s.base > 0 ? s.base : s.item;
-				if (item === 0) return true;
-				if (!body.trim()) return s.base > 0;
-				if (indent >= item) return false;
-				return itemEnds(item, s.base > 0 && opensFence);
+				// A block in a list item in a quote: the quote takes a lazy line (one that opens no block), and the item
+				// keeps it by marked's list rule (itemEnds). A block directly in a quote ends with it.
+				// (Observed in pi: a quoted line with trailing white space before it ends the lazy line's reading, and
+				// the next quoted line after a lazy line leaves the block.)
+				if (s.base > 0) {
+					if (!body.trim() || INTERRUPT.test(body) || thematicBreak(body) || /[ \t]$/.test(lines[i - 1]) || itemEnds(s.base, s.depth)) return true;
+					s.lazy = true;
+					return false;
+				}
+				// A block in a quote that is in a list item: pi's list item may take the line after the quote (lazily or
+				// indented), and with it the block. The reader keeps the line in the block until the item ends (where
+				// pi ends the quote's block instead, this is over-protection).
+				if (s.item === 0) return true;
+				if (!body.trim()) return false;
+				if (indent >= s.item) return false;
+				return itemEnds(s.item, 0);
 			}
+			if (s.lazy) return true;
 			if (depth > s.depth && lead < s.base) return true;
 			if (!(s.base > 0 && body.trim() !== "" && indent < s.base)) return false;
-			return itemEnds(s.base, opensFence);
+			return itemEnds(s.base, s.depth);
 		};
 		if (fence) {
 			if (!leftContainer(fence, true)) {
@@ -801,6 +827,8 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 				continue;
 			}
 			leftBase = fence.base;
+			// (A fence in a list item in a quote: pi keeps the next line in the quote lazily.)
+			if (depth < fence.depth && fence.base > 0) leftQuoteAt = i;
 			fence = undefined;
 			leftAt = i;
 			// Left after a blank line: the block surely ended there (the next block may be math).
@@ -809,15 +837,31 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 		if (comment) {
 			if (!leftContainer(comment, false)) {
 				// A comment in an HTML block of types 1, 3-5 ends with the block: pi hides it up to the block's end.
-				const blockEnds = comment.html instanceof RegExp && comment.html.test(lines[i]);
-				if (blockEnds && htmlShow === comment.html) {
+				const marker = comment.html instanceof RegExp ? lines[i].search(comment.html) : -1;
+				const close = lines[i].indexOf("-->");
+				if (marker >= 0 && htmlShow === comment.html) {
 					htmlShow = false;
 					htmlShownEnd = i;
 				}
-				// A comment in an HTML block of type 6 or 7 ends at its blank line, which the blank line branch reads.
-				if (comment.html === "flow" && !lines[i].trim()) comment = undefined;
-				else {
-					if (blockEnds || lines[i].includes("-->")) comment = undefined;
+				if (marker >= 0 && itemHtml?.end === comment.html) itemHtml = undefined;
+				if (comment.html === "flow" && itemHtml?.end === "flow" && !body.trim()) itemHtml = undefined;
+				// A comment in an HTML block of type 6 or 7 ends at its blank line (marked's: spaces and tabs only),
+				// which the blank line branch reads.
+				if (comment.html === "flow" && /^[ \t]*$/.test(lines[i])) comment = undefined;
+				else if (comment.html !== false && close >= 0 && (marker < 0 || close < marker)) {
+					// pi-tui hides each comment of the HTML block's text: after this one's end the text shows, up to
+					// the next comment, which may go on over the next lines.
+					comment = commentOpenAt(lines[i], close + 3) >= 0 ? comment : undefined;
+					htmlShown = true;
+					push({ kind: "prose", literal: mergeRanges([[0, close + 3], ...inline(i, close + 3, false)]), plain: false }, i);
+					continue;
+				} else {
+					if (marker >= 0 || close >= 0) {
+						// A top-level comment block (or the HTML block it is in) ends with its line: the next line starts a
+						// new block.
+						if (comment.depth === 0 && comment.base === 0 && depth === 0 && listColumns.length === 0) endTopBlock(i);
+						comment = undefined;
+					}
 					push(code, i);
 					continue;
 				}
@@ -826,10 +870,19 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 				if (depth === 0 && !lines[i - 1].trim()) blockEnd = i - 1;
 			}
 		}
+		if (itemHtml && (leftContainer(itemHtml, false) || (itemHtml.end === "flow" && !body.trim()))) itemHtml = undefined;
+		// This line is HTML text of a container's HTML block (its end marker's line too).
+		const itemHtmlLine = itemHtml !== undefined;
+		if (itemHtml?.end instanceof RegExp && itemHtml.end.test(lines[i])) itemHtml = undefined;
 		if (indentedBase !== undefined) {
 			if (!body.trim() || indent >= indentedBase + 4) {
 				// In a list item the reader lost, pi may read the line as the item's fence: the reader opens one
 				// that each closing line opens again (the lines stay code either way).
+				// The line may end the HTML block the code sits in (pi reads it as HTML text).
+				if (htmlShow instanceof RegExp && htmlShow.test(lines[i])) {
+					htmlShow = false;
+					htmlShownEnd = i;
+				} else if (htmlShow === "flow" && /^[ \t]*$/.test(lines[i])) htmlShow = false;
 				const again = lostItem > 0 && indent - lostItem <= 3 ? body.match(FENCE_OPEN) : null;
 				if (again && !(again[1][0] === "\x60" && again[2].includes("\x60"))) {
 					fence = { char: again[1][0], length: again[1].length, base: 0, depth, line: i, chain: true, item: 0, onMarker: false };
@@ -853,7 +906,9 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 			paragraph = false;
 			// pi's list item may go on around a quote (a quote in the item, or lines after it): the reader does
 			// not follow it, so fences read while unsure follow lostItem.
-			if (listColumns.length) lostItem = Math.max(lostItem, listColumns[listColumns.length - 1]);
+			// (A line indented less than the item's content after a blank line, or one that opens a quote there, ends it.)
+			const column = listColumns.at(-1) ?? 0;
+			if (column > 0 && !(lead < column && (read[i - 1]?.kind === "blank" || depth > previousDepth))) lostItem = Math.max(lostItem, column);
 			listColumns.length = 0;
 		}
 		if (!lazy) previousDepth = depth;
@@ -866,13 +921,14 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 			htmlParagraph = false;
 			htmlFlow = false;
 			// Types 1 and 3-5 hold blank lines; types 6 and 7 end at one.
-			if (htmlShow === "flow") htmlShow = false;
+			// (marked's blank line holds spaces and tabs only: a no-break space line is HTML text.)
+			if (htmlShow === "flow" && /^[ \t]*$/.test(lines[i])) htmlShow = false;
 			push({ kind: "blank", literal: [], plain: false }, i);
 			const clean = !fence && indentedBase === undefined && !paragraph && !emptyItem && previousDepth === 0 && listColumns.length === 0;
 			// A definition gives meaning to reference links before it, so no head holds one.
 			// Lines are checked for a definition only up to a candidate boundary, each once.
 			if (clean && !definitionSeen) for (; definitionChecked < i && !definitionSeen; definitionChecked++) definitionSeen = mayDefine(lines[definitionChecked]);
-			if (clean && !definitionSeen && seen <= i && !containerMath && !mathOff && !pendingMath && !inlineCarry && !htmlParagraph && literalUntil === undefined && !discovering && !htmlEnd && htmlShow === false && comment === undefined && !containerHtml && lostItem === 0 && lazyItem === 0) boundary = i;
+			if (clean && !definitionSeen && seen <= i && !containerMath && !mathOff && !pendingMath && !inlineCarry && !htmlParagraph && literalUntil === undefined && !discovering && !htmlEnd && htmlShow === false && lostItem === 0 && lazyItem === 0 && itemHtml === undefined) boundary = i;
 			continue;
 		}
 		// A lost list item surely ended: a top-level line indented less after a blank line, or one that opens a block.
@@ -886,6 +942,15 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 			htmlShow = false;
 			htmlShownEnd = i;
 		}
+		// pi-tui hides each comment in an HTML block's text, whatever Markdown the line holds (a heading, a code
+		// span): a comment that does not end on this line goes on to its end or to the block's end.
+		if (((htmlShown && htmlShow !== false) || itemHtml) && !body.startsWith("<!--")) {
+			const at = commentOpenAt(lines[i], 0);
+			if (at >= 0) {
+				comment = itemHtml && !htmlShown ? { depth: itemHtml.depth, base: itemHtml.base, line: i, item: itemHtml.item, onMarker: false, html: itemHtml.end } : { depth: 0, base: 0, line: i, item: 0, onMarker: false, html: htmlShow };
+				rawOpen = { line: i, at };
+			}
+		}
 		// After a blank line, a line indented less than a list item's content ends that item.
 		// Any other line indented less than an item's content, except a lazy paragraph line, ends it too.
 		if (containerMath && depth === 0 && read[i - 1]?.kind === "blank" && (listColumns.length === 0 || indent < listColumns[0])) containerMath = false;
@@ -895,12 +960,9 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 		// fence run, "#" or a thematic break: the line opens a new paragraph after the list.
 		if (paragraph && !opensBlock && depth === previousDepth && columns > 0 && indent < listColumns[columns - 1] && read[i - 1]?.kind === "prose") {
 			const column = listColumns[columns - 1];
-			const before = blockOf(lines[i - 1]);
-			const item = before.body.match(LIST_MARKER);
-			const h = item ? before.body.slice(item[1].length) : " ".repeat(Math.max(0, before.indent - column)) + before.body;
-			const l = Math.min(3, column - 1);
-			const lead = h.match(/^ */)![0].length;
-			if (before.indent - column >= 4 || new RegExp(`^ {0,${l}}(?:\x60\x60\x60|~~~|#)`).test(h) || (lead <= l && thematicBreak(h.slice(lead)))) paragraph = false;
+			const full = afterQuotes(lines[i - 1], depth);
+			const item = blockOf(lines[i - 1]).body.match(LIST_MARKER);
+			if (endsItemAfter(full, item ? afterMarker(full) : full.slice(column), column)) paragraph = false;
 		}
 		// A line that left a fence in a nested list item may stay lazily in an outer item for pi: the reader
 		// stops following that item (lostItem).
@@ -927,7 +989,7 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 			// A paragraph that opened in a list item takes an underline only inside that item.
 			// marked's lheading rule also takes no title line after the first that is indented 4 or more or opens with
 			// a list marker and a space, a fence, ">", "#" or "<".
-			let title = listColumns.length === columns && !htmlParagraph && (paragraphColumn === 0 || indent >= paragraphColumn);
+			let title = listColumns.length === columns && !htmlParagraph && (paragraphColumn === 0 || indent >= paragraphColumn) && paragraphStart !== leftQuoteAt;
 			for (let k = paragraphStart + 1; title && k < i; k++) {
 				const line = blockOf(lines[k]);
 				title = line.indent - line.lead < 4 && line.indent < 4 && !LHEADING_STOP.test(line.body);
@@ -1009,7 +1071,12 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 		// reads no more math in the reply and draws as before.
 		// In a quote or a list item, pi lexes the container's content on its own: pending math there ends with
 		// the container and leaves top-level math after it alone.
-		if (mathMark && mathEnd < 0 && depth + innerDepth === 0 && !marker && listColumns.length === 0) mathOff = true;
+		if (mathMark && mathEnd < 0 && depth + innerDepth === 0 && !marker && listColumns.length === 0) {
+			mathOff = true;
+			// pi-tui's pending display math (its tokenizeBlockLatex): the rest of the reply, shown as written.
+			const rest = [content.replace(/^(?:\$\$|\\\[)[ \t]*/, ""), ...lines.slice(i + 1)].join("\n").replace(/^\n/, "");
+			if (mathEnd === PENDING && rest && (content[0] === "\\" || PENDING_MATH.test(rest)) && !hasTableStart(rest)) writtenFrom = i;
+		}
 		else if (mathMark && mathEnd < 0 && !containerMath) {
 			// In a container: only a block that does not close may make pi show the rest as written.
 			const end = mathBlockEnd(lines, i, content);
@@ -1022,15 +1089,13 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 			i--;
 			continue;
 		}
-		if (depth + innerDepth === 0 && !marker && listColumns.length === 0 && !lazy) {
-			containerHtml = false;
-		}
 		const open = content.match(FENCE_OPEN);
-		// In an HTML block pi shows a fence's opening line as HTML text. Where the reader is not sure of the HTML
-		// block (in a container, or one it does not follow), it opens a fence that each closing line opens again.
+		// In an HTML block pi shows a fence's opening line as HTML text. In a list item the reader lost, it opens a
+		// fence that each closing line opens again. (In a container's HTML block it reads fences as pi reads them
+		// outside HTML: a documented limit.)
 		const lost = Math.max(lostItem, lazyItem);
-		if (open && !htmlShown && (marker || innerDepth > 0 || indent - base <= 3 || (lost > 0 && indent - lost <= 3) || (lazyItem > 0 && indent - lazyItem <= 3)) && !(open[1][0] === "\x60" && open[2].includes("\x60"))) {
-			const chain = inHtml || containerHtml || lost > 0;
+		if (open && !htmlShown && !itemHtmlLine && (marker || innerDepth > 0 || indent - base <= 3 || (lost > 0 && indent - lost <= 3)) && !(open[1][0] === "\x60" && open[2].includes("\x60"))) {
+			const chain = lost > 0;
 			fence = { char: open[1][0], length: open[1].length, base: innerDepth ? 0 : contentBase, depth: depth + innerDepth, line: i, chain, item: listColumns.at(-1) ?? 0, onMarker: marker && innerDepth === 0 };
 			if (depth + innerDepth === 0 && !marker && listColumns.length === 0 && !inHtml && !htmlShown && !htmlParagraph && !mathOff && !pendingMath && !containerMath)
 				sureFences.push({ start: i + 1, char: fence.char, length: fence.length });
@@ -1045,10 +1110,16 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 			paragraph = false;
 			push(code, i);
 			// In an HTML block pi-tui hides the comment up to "-->" after "<!--" only.
-			const ended = htmlShown ? htmlShow === false || content.includes("-->", 4) : /^<!--(?:-?>|[\s\S]*?-->)/.test(content);
+			// A second comment may open after the first one's end. In an HTML block pi-tui hides each comment up to
+			// "-->" after "<!--", or to the block's end.
+			const ended = htmlShown ? htmlShow === false || commentOpenAt(content, 0) < 0 : itemHtmlLine ? itemHtml === undefined || commentOpenAt(content, 0) < 0 : /^<!--(?:-?>|[\s\S]*?-->)/.test(content);
 			// In an HTML block quote and list markers are HTML text: the comment has no container there.
 			if (!ended && htmlShown) comment = { depth: 0, base: 0, line: i, item: 0, onMarker: false, html: htmlShow };
-			else if (!ended) comment = { depth: depth + innerDepth, base: innerDepth ? 0 : contentBase, line: i, item: listColumns.at(-1) ?? 0, onMarker: false, html: htmlShown ? htmlShow : false };
+			else if (!ended && itemHtml) comment = { depth: itemHtml.depth, base: itemHtml.base, line: i, item: itemHtml.item, onMarker: false, html: itemHtml.end };
+			else if (!ended) comment = { depth: depth + innerDepth, base: innerDepth ? 0 : contentBase, line: i, item: listColumns.at(-1) ?? 0, onMarker: false, html: false };
+			// A top-level comment block (or the HTML block it is in) that ends on its line: the next line starts a new
+			// block (math may open).
+			else if ((!htmlShown || htmlShownEnd === i) && depth + innerDepth === 0 && !marker && listColumns.length === 0) endTopBlock(i);
 			continue;
 		}
 		// A link reference definition, outside a paragraph (a new list item or quote opens none): pi shows none
@@ -1123,7 +1194,8 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 		// Link protection is off only where the reader is sure that pi shows an HTML block as written: at top level
 		// (no quote, no list), as marked's html rule reads it. Elsewhere links stay protected (at worst a pill pi
 		// shows in HTML text is left as written).
-		if (content.startsWith("<") && !htmlShown && plain && !lazy && content === body) {
+		// (After pending math pi shows the rest as written: no HTML block opens.)
+		if (content.startsWith("<") && !htmlShown && plain && !lazy && content === body && !mathOff) {
 			// After an HTML block of types 1, 3-5 closed on the line before, this line starts a new block. Types 3-5
 			// and 7 interrupt no paragraph, also not a quote's paragraph that the line continues lazily.
 			const fresh = !wasParagraph || htmlShownEnd === i - 1;
@@ -1133,7 +1205,8 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 			const line = i < lines.length - 1 ? content + "\n" : content;
 			const raw = HTML_RAW.exec(line);
 			const until = raw ? undefined : HTML_UNTIL.slice(1).find(([opens]) => opens.test(content));
-			if (raw && interrupts) {
+			// marked's paragraph interrupt is case-sensitive: "<PRE>" or "<DIV>" in a paragraph is paragraph text.
+			if (raw && interrupts && (fresh || /^<(?:script|pre|style|textarea)/.test(content))) {
 				// Type 1 ends at the closing tag of its own opener.
 				const end = new RegExp("</" + raw[1] + ">", "i");
 				htmlShown = true;
@@ -1143,15 +1216,28 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 				htmlShown = true;
 				htmlShow = until[1].test(content.slice(2)) ? false : until[1];
 				if (htmlShow === false) htmlShownEnd = i;
-			} else if ((interrupts && HTML_FLOW_LINE.test(line)) || (fresh && HTML_TAG_LINE.test(content))) {
+			} else if ((interrupts && (fresh ? HTML_FLOW_LINE : HTML_FLOW_LINE_CASED).test(line)) || (fresh && HTML_TAG_LINE.test(content))) {
 				htmlShown = true;
 				htmlShow = "flow";
 			}
 		}
+		if (content.startsWith("<") && !plain && !itemHtmlLine && (!wasParagraph || newItem || innerDepth > 0)) {
+			const line = i < lines.length - 1 ? content + "\n" : content;
+			const raw = HTML_RAW.exec(line);
+			const until = raw ? undefined : HTML_UNTIL.slice(1).find(([opens]) => opens.test(content));
+			let end: RegExp | "flow" | undefined;
+			if (raw) {
+				const close = new RegExp("</" + raw[1] + ">", "i");
+				end = close.test(content.slice(raw[0].length)) ? undefined : close;
+			} else if (until) end = until[1].test(content.slice(2)) ? undefined : until[1];
+			else if (HTML_FLOW_LINE.test(line) || HTML_TAG_LINE.test(content)) end = "flow";
+			if (end) itemHtml = { depth: depth + innerDepth, base: innerDepth ? 0 : contentBase, line: i, item: listColumns.at(-1) ?? 0, onMarker: marker && innerDepth === 0, end };
+		}
 		if (content.startsWith("<")) {
 			htmlParagraph = true;
-			if (!plain) containerHtml = true;
-			const kind = plain && !lazy && !inHtml ? HTML_UNTIL.find(([opens]) => opens.test(content)) : undefined;
+			// In a paragraph only type 1 interrupts (case-sensitive, from the first column, marked's paragraph rule).
+			const starts = !wasParagraph || htmlShownEnd === i - 1 || (lines[i][0] === "<" && /^<(?:script|pre|style|textarea)/.test(content));
+			const kind = plain && !lazy && !inHtml && starts ? HTML_UNTIL.find(([opens]) => opens.test(content)) : undefined;
 			if (kind && !kind[1].test(content.slice(2))) htmlEnd = kind[1];
 			else if (kind) htmlClosedAt = i;
 			else if (!inHtml) {
@@ -1171,6 +1257,13 @@ function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boun
 		paragraph = !emptyItem;
 		const paragraphPlain = plain && !/^[<|]/.test(body);
 		push({ kind: "prose", literal: literalOf(i, true), plain: paragraphPlain }, i);
+		// An HTML block of types 1, 3-5 that ends on this top-level line ends its block: the next line starts a new
+		// one (indented code or display math may open).
+		if (htmlShownEnd === i && plain && !lazy) {
+			paragraph = false;
+			htmlParagraph = false;
+			blockEnd = i;
+		}
 	}
 	// The reply ends where pi's parser keeps the next line in the same block: an open top-level HTML block of
 	// types 1, 3-5, or display math that pi shows as math or as written up to the reply's end.
@@ -1206,6 +1299,19 @@ const HTML_FLOW = /^<\/?(?:address|article|aside|base|basefont|blockquote|body|c
 
 // marked's type 6 opener: the tag, then spaces, a line break or ">" (HTML_FLOW reads any white space there).
 const HTML_FLOW_LINE = new RegExp(HTML_FLOW.source.replace("(?:\\s|\\/?>|$)", "(?: +|\\n|\\/?>)"), "i");
+// marked's paragraph interrupt for type 6: the same tags, case-sensitive.
+const HTML_FLOW_LINE_CASED = new RegExp(HTML_FLOW_LINE.source);
+
+/** The column of a comment that opens in text from "from" on and does not end on the line (pi-tui's comment scan), or -1. */
+function commentOpenAt(text: string, from: number): number {
+	for (let p = from; ; ) {
+		const open = text.indexOf("<!--", p);
+		if (open < 0) return -1;
+		const close = text.indexOf("-->", open + 4);
+		if (close < 0) return open;
+		p = close + 3;
+	}
+}
 
 /** Line k opens a display math block that pi's parser takes: closed, or pending with math in it. */
 function opensMathBlock(lines: string[], k: number, see: (k: number) => void): boolean {
@@ -1215,6 +1321,48 @@ function opensMathBlock(lines: string[], k: number, see: (k: number) => void): b
 	see(end >= 0 ? end : lines.length);
 	if (end >= 0 || content[0] === "\\") return true;
 	return PENDING_MATH.test([content.slice(2), ...lines.slice(k + 1)].join("\n"));
+}
+
+/** line with its first "quotes" block quote markers removed and tabs as three spaces (pi's tab replacement). */
+function afterQuotes(line: string, quotes: number): string {
+	let rest = line.replace(/\t/g, "   ");
+	for (let d = 0; d < quotes; d++) {
+		const q = rest.match(QUOTE);
+		if (!q) break;
+		rest = rest.slice(q[0].length);
+	}
+	return rest;
+}
+/** The text after the last list marker that opens full, spaces included (marked's text of the innermost item's marker line). */
+function afterMarker(full: string): string {
+	let at = full.search(/\S/);
+	for (;;) {
+		const m = full.slice(at).match(LIST_MARKER);
+		if (!m) return full.slice(at);
+		const after = at + m[1].length;
+		const next = full.slice(after).search(/\S/);
+		if (next < 0 || !LIST_MARKER.test(full.slice(after + next))) return full.slice(after);
+		at = after + next;
+	}
+}
+/**
+ * marked's list rule: a line indented less than an item's content (column) ends the item when the line before
+ * (full, after its quote markers; h, its text after the content column) is blank, is indented 4 more, or starts
+ * with a fence run, "#" or a thematic break.
+ */
+function endsItemAfter(full: string, h: string, column: number): boolean {
+	if (!full.trim()) return true;
+	const lead = h.search(/\S/);
+	if (lead >= 4) return true;
+	const l = Math.min(3, column - 1);
+	return new RegExp(`^ {0,${l}}(?:\x60\x60\x60|~~~|#)`).test(h) || (lead >= 0 && lead <= l && thematicBreak(h.slice(lead).trimEnd()));
+}
+
+/** text holds a table start (pi-tui's containsTableStart): a row with "|" over a delimiter row. */
+function hasTableStart(text: string): boolean {
+	const rows = text.split("\n");
+	for (let r = 0; r + 1 < rows.length; r++) if ((rows[r + 1].includes("|") || rows[r].includes("|")) && TABLE_DELIMITER.test(rows[r + 1])) return true;
+	return false;
 }
 
 /** "\\" before index i of text escapes it: an odd number of backslashes. */
