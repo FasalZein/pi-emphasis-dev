@@ -1671,7 +1671,11 @@ export function strongPairs(text: string, literal: Range[]): { pairs: StrongPair
 	const simple = simplePairs(text, literal);
 	if (simple) return simple;
 	const read: Lexed = { pairs: [], crossesLine: false, links: text.includes("](") };
-	lexInline(text, 0, text.length, literal, false, read, !URL_SIGN.test(text));
+	// The start of the last URL_SIGN match (every match, overlapping ones too), -1 for none.
+	let slowUntil = -1;
+	URL_SIGNS.lastIndex = 0;
+	for (let m: RegExpExecArray | null; (m = URL_SIGNS.exec(text)) !== null; URL_SIGNS.lastIndex = m.index + 1) slowUntil = m.index;
+	lexInline(text, 0, text.length, literal, false, read, slowUntil);
 	return { pairs: read.pairs, crossesLine: read.crossesLine };
 }
 
@@ -1765,18 +1769,21 @@ const spans = (text: string, start: number, end: number) => text.slice(start, en
 
 /** Text where a bare URL or email may start: only there do text tokens end at places other than NEXT_SIGN. */
 const URL_SIGN = /[A-Za-z0-9._+-]@[a-zA-Z0-9-_]+\.|:\/\/|www\./;
+const URL_SIGNS = new RegExp(URL_SIGN.source, "g");
 /** The characters where a token other than text may start, without URLs: escape, link, emphasis, strikethrough. */
 const NEXT_SIGN = /[\\\[!*_~]/g;
 
 /**
- * fast: the text holds no URL_SIGN. Text tokens then matter only through the character before the next
+ * slowUntil: the start in all of the last URL_SIGN match, -1 for none. From an index after it the text is fast:
+ * no bare URL or email token can start there, because each holds its URL_SIGN match after its start. Fast text
+ * is read as follows, from the state the slow reading reached at that index. Text tokens then matter only through the character before the next
  * escape, link, emphasis or strikethrough sign (the previous character pi's emphasis rule reads), so a text
  * token runs to the next such sign or literal range. Other stops of marked's text rule split text tokens
  * without changing that character, and a line break token leaves it whitespace or empty, which the emphasis
  * rule reads alike.
  */
 const NO_EMPHASIS_SIGN = /[^*_]*/y;
-function lexInline(all: string, from: number, to: number, literal: Range[], inLink: boolean, read: Lexed, fast: boolean): void {
+function lexInline(all: string, from: number, to: number, literal: Range[], inLink: boolean, read: Lexed, slowUntil: number): void {
 	// Text without "*" or "_" holds no strong span and no token that could hold one.
 	NO_EMPHASIS_SIGN.lastIndex = from;
 	NO_EMPHASIS_SIGN.exec(all);
@@ -1798,6 +1805,7 @@ function lexInline(all: string, from: number, to: number, literal: Range[], inLi
 			continue;
 		}
 		const c = text[i];
+		const fast = from + i > slowUntil;
 		if (c === "\\") {
 			ESCAPE.lastIndex = i;
 			if (ESCAPE.test(text)) {
@@ -1813,7 +1821,7 @@ function lexInline(all: string, from: number, to: number, literal: Range[], inLi
 			if (link) {
 				read.crossesLine ||= spans(text, i, i + link[0].length);
 				const start = i + link[0].indexOf("[") + 1;
-				lexInline(all, from + start, from + start + link[1].length, literal, true, read, fast);
+				lexInline(all, from + start, from + start + link[1].length, literal, true, read, slowUntil);
 				i += link[0].length;
 				continue;
 			}
@@ -1830,7 +1838,7 @@ function lexInline(all: string, from: number, to: number, literal: Range[], inLi
 				// A link's text is drawn as written: a color escape there would end the link label.
 				if (token.strong && !inLink) read.pairs.push([from + i, from + token.end - 2]);
 				read.crossesLine ||= spans(text, i, token.end);
-				lexInline(all, from + i + width, from + token.end - width, literal, inLink, read, fast);
+				lexInline(all, from + i + width, from + token.end - width, literal, inLink, read, slowUntil);
 				i = token.end;
 				continue;
 			}
@@ -1840,7 +1848,7 @@ function lexInline(all: string, from: number, to: number, literal: Range[], inLi
 			const del = DEL.exec(text);
 			if (del) {
 				read.crossesLine ||= spans(text, i, i + del[0].length);
-				lexInline(all, from + i + 2, from + i + 2 + del[2].length, literal, inLink, read, fast);
+				lexInline(all, from + i + 2, from + i + 2 + del[2].length, literal, inLink, read, slowUntil);
 				i += del[0].length;
 				continue;
 			}
