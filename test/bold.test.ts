@@ -1,13 +1,19 @@
-// Bold delimiters follow pi (differential): for generated replies, pi's rendering of the drawn reply shows the
-// same visible text and the same bold spans as pi's rendering of the written reply, and the bold color covers
-// only text pi draws bold. The reference is pi itself: pi-tui's Markdown (pi's configured parser, CJK emphasis
-// included), as test/oracle.ts uses it. Pills are drawn text-only without icons here, so a drawn pill shows its
-// word; the comparison reads a written pill "[[Word]]" as that word.
+// Bold delimiters follow pi (differential). The reference is pi itself: pi-tui's Markdown with pi's configured
+// parser (CJK emphasis included), hyperlinks on. For each reply, pi's rendering of the drawn reply is compared with
+// pi's rendering of the written reply under three separate contracts:
+//   preservation   the same visible text (exact whitespace; a pill reads as its word, a label icon is dropped),
+//                  the same bold, italic and strikethrough per character, and the same OSC 8 link targets;
+//   no false color the bold color only on characters pi draws bold;
+//   required color every character of an unambiguous bold span (letters between spaces, top-level paragraph,
+//                  one line or several) takes the bold color.
+// The extension may leave any span as written (no color); only the third contract asks for color.
 import { describe, expect, test } from "bun:test";
-import { Markdown } from "@earendil-works/pi-tui";
+import { Markdown, setCapabilityOverrides } from "@earendil-works/pi-tui";
+import { REVIEW, read } from "./rendering.ts";
 import { load } from "./seam.ts";
 
-const code = (name: string) => 16 + ([...name].reduce((h, c) => h * 31 + c.charCodeAt(0), 7) % 200);
+setCapabilityOverrides({ hyperlinks: true });
+const code = (name: string) => 16 + ([...name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 100003, 7) % 200);
 const fgAnsi = (name: string) => "\x1b[38;5;" + code(name) + "m";
 const theme = {
 	fg: (n: string, t: string) => fgAnsi(n) + t + "\x1b[39m",
@@ -18,98 +24,120 @@ const theme = {
 };
 const TONES = ["success", "error", "warning", "ask", "danger", "mode", "owner", "neutral"];
 const ext = load(theme, { icons: "none", fill: Object.fromEntries(TONES.map((t) => [t, "text"])) });
-const BOLD_COLOR = fgAnsi("mdLink");
+const BOLD_FG = fgAnsi("mdLink");
 
 const plain = (t: string) => t;
-const span = (name: string) => (t: string) => "{" + name + "}" + t + "{/" + name + "}";
-const styled = { heading: span("H"), link: plain, linkUrl: plain, code: plain, codeBlock: plain, codeBlockBorder: plain, quote: plain, quoteBorder: plain, hr: plain, listBullet: plain, bold: span("B"), italic: span("I"), strikethrough: span("S"), underline: plain };
-const CONTROL = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[ -\/]*[@-~]/g;
-const ON = "\u0003";
-const OFF = "\u0004";
-/** pi's rendering with style spans marked, the bold color as ON/OFF and every other control sequence removed. */
-function render(md: string): string {
-	return new Markdown(md, 0, 0, styled)
-		.render(2000)
-		.map((l) => l.split(BOLD_COLOR).join(ON).replace(/\x1b\[(?:39|0)m/g, OFF).replace(/\x1b\[38;[0-9;]*m/g, OFF).replace(CONTROL, "").trimEnd())
-		.join("\n");
-}
-/** Visible text with style spans; written pills read as their word, label icons dropped, space runs as one space. */
-const shown = (r: string) => r.replace(/[\u0003\u0004]/g, "").replace(/[\ue000-\uf8ff\u{f0000}-\u{ffffd}]\u2002/gu, "").replace(/\[\[([A-Za-z]+)\]\]/g, "$1").replace(/[ \u00a0]+/g, " ");
-/** Characters drawn in the bold color outside every bold span. */
-function colorOutsideBold(r: string): string {
-	let on = false;
-	let depth = 0;
-	let out = "";
-	for (let i = 0; i < r.length; i++) {
-		if (r[i] === ON) on = true;
-		else if (r[i] === OFF) on = false;
-		else if (r.startsWith("{B}", i)) (depth++, (i += 2));
-		else if (r.startsWith("{/B}", i)) (depth--, (i += 3));
-		else if (r[i] === "{" && /^\{\/?[HIS]\}/.test(r.slice(i))) i = r.indexOf("}", i);
-		else if (on && depth === 0 && r[i].trim()) out += r[i];
-	}
-	return out;
-}
+const sgr = (on: number, off: number) => (t: string) => "\x1b[" + on + "m" + t + "\x1b[" + off + "m";
+// pi's styles as SGR: bold, italic and strikethrough are read back per character.
+const piTheme = { heading: sgr(4, 24), link: plain, linkUrl: plain, code: plain, codeBlock: plain, codeBlockBorder: plain, quote: plain, quoteBorder: plain, hr: plain, listBullet: plain, bold: sgr(1, 22), italic: sgr(3, 23), strikethrough: sgr(9, 29), underline: plain };
 
-// Fragments per class. Each reply is lines of fragments; the class counts say what the replies cover.
-const CLASSES: Record<string, string[]> = {
-	operator: ["2 ** 3", "2 ** 3 ** 4", "a __ b __ c", "x ** y", "n __ m"],
-	run3: ["***both***", "___both___", "****four****", "***a** b*", "**a***", "___x__"],
-	intraword: ["snake_case_name", "a*b*c", "foo__bar__baz", "x**y**z", "a_b__c", "file__init__.py"],
-	nested: ["**a **b** c**", "**a****b**", "**a** **b**", "**a**b**c**", "__a **b** c__", "**x __y__ z**", "*a **b** c*"],
-	multiline: ["**first\nsecond** after", "**open\nmiddle\nclose** end", "text **a\nb** c **d**", "x**\n**y", "**end.\nnext** x", "**a \\\nb** c", "**a\n*b* c**", "**a  \nb** c", "**中\n文** x", "**a_\n_b** c", "**a\n__b__ c**"],
-	pill: ["**Result:** [[Done]] text", "x**[[Done]]** y", "**[[Failed]]**", "[[Done]]**x**", "**Build** [[Passed]] text", "a **[[Done]]** b", "**x [[Done]]** y", "**x**[[Done]]"],
-	label: ["**Do:** run it", "**Next:** go", "**Check:** x **y**", "**Result:**", "**Finding** text", "- **Risk:** low"],
-	glyph: ["✓**ok**", "**✓ ok**", "**ok** → **go**", "**a→b**", "✗ **no**"],
-	cjk: ["中文**加粗**文字", "**「引用」**です", "日本**語**", "**한국어**입니다", "これは**太字**です。", "**中**，文"],
-	escape: ["\\**not bold**", "\\*\\*x\\*\\*", "**a\\*b**", "\\\\**bold**", "x \\** a **b**", "**a\\**"],
-	plain: ["plain words", "**bold**", "__under__", "more **text** here", "(**paren**)", "**\"quoted\"**", "end."],
+const render = (md: string, width = 2000) => new Markdown(md, 0, 0, piTheme).render(width);
+/** The facts of the written and the drawn reply that the contracts compare. */
+function compare(md: string, width = 2000) {
+	const raw = read(render(md, width), BOLD_FG);
+	const drawn = read(render(ext.draw(md), width), BOLD_FG);
+	return { raw, drawn };
+}
+const preserved = (md: string, width?: number) => {
+	const { raw, drawn } = compare(md, width);
+	return { text: drawn.text, style: drawn.style, targets: drawn.targets, expected: { text: raw.text, style: raw.style, targets: raw.targets } };
 };
-const NAMES = Object.keys(CLASSES);
-let seed = 20261119;
-const rand = (k: number) => ((seed = (seed * 1103515245 + 12345) % 2147483648), seed % k);
-const PREFIX = ["", "", "", "- ", "> ", "1. "];
-function reply(classes: Set<string>): string {
-	const lines: string[] = [];
-	for (let n = 1 + rand(4); n > 0; n--) {
-		const parts: string[] = [];
-		for (let f = 1 + rand(3); f > 0; f--) {
-			const name = NAMES[rand(NAMES.length)];
-			classes.add(name);
-			const list = CLASSES[name];
-			parts.push(list[rand(list.length)]);
-		}
-		lines.push(PREFIX[rand(PREFIX.length)] + parts.join(rand(4) === 0 ? "" : " "));
-	}
-	return lines.map((l, i) => (i === 0 ? l : (rand(2) ? "\n" : "\n\n") + l)).join("");
-}
 
-const REPLIES = 4000;
-describe("bold delimiters follow pi", () => {
-	test("examples from the review: pi's visible text and bold spans stay as written", () => {
-		for (const md of ["The powers are 2 ** 3 ** 4.", "2 ** 3 and **bold** here", "___important___", "a __ b __ c", "**first\nsecond** after", "x **[[Done]]** y **z", "a ** b [[Done]] c **d**"]) {
-			const raw = render(md);
-			const out = render(ext.draw(md));
-			expect(shown(out)).toBe(shown(raw));
-			expect(colorOutsideBold(out)).toBe("");
+describe("review inputs", () => {
+	for (const md of REVIEW) {
+		test("preservation and no false color: " + JSON.stringify(md), () => {
+			const p = preserved(md);
+			expect({ text: p.text, style: p.style, targets: p.targets }).toEqual(p.expected);
+			expect(compare(md).drawn.falseColor).toBe("");
+		});
+	}
+	test("a narrow table that pi shows raw: preservation and no false color", () => {
+		for (const md of ["| left | right |\n|---|---|\n| **one** | two |", "| left | right |\n|---|---|\n| **one | two** |"]) {
+			const p = preserved(md, 8);
+			expect({ text: p.text, style: p.style, targets: p.targets }).toEqual(p.expected);
+			expect(compare(md, 8).drawn.falseColor).toBe("");
 		}
 	});
-	test("generated replies: same visible text and bold spans, bold color only inside bold", () => {
-		const counts = Object.fromEntries(NAMES.map((n) => [n, 0]));
-		const failures: string[] = [];
+	test("no false action icon: __Do:** literal__ draws no icon", () => {
+		expect(ext.draw("__Do:** literal__")).not.toMatch(/[\ue000-\uf8ff]/);
+	});
+});
+
+// Generator: each dimension is drawn on its own; the realized combinations are counted.
+function rng(seed: number) {
+	return (k: number) => {
+		seed = (seed + 0x6d2b79f5) | 0;
+		let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+		return (((t ^ (t >>> 14)) >>> 0) % k);
+	};
+}
+const D = {
+	char: ["*", "_"],
+	openLength: [1, 2, 2, 2, 3, 4],
+	closeLength: [1, 2, 2, 2, 3, 4],
+	left: ["", " ", "a", "(", "中", "「", "~", "~~", "`c`", "[[Done]]", "https://x.org/a", "→", "\\", "1", "\"", "$x$ "],
+	inner: ["word", "two words", " spaced ", "中文", "「引」", "`code`", "[link](/u)", "[[Failed]]", "https://example.org", "a <!-- c --> b", "~~strike~~", "*em*", "_em_", "**in**", "a\nb", "Do:", "x@y.org", "<b>t</b>", "a ](x) b", "✓ ok"],
+	right: ["", " ", "a", ")", "。", "文", "~", "_x_", "`c`", "[[Done]]", "](u)", "→", ".", "\\", "1"],
+	container: ["", "", "- ", "> ", "1. ", "  ", "# ", "| ", "<div>"],
+	after: ["", "\n", "\nnext line", "\n\nnew paragraph", "\n|---|---|\n| a | b |", " tail **x**", " $y"],
+};
+type Dim = keyof typeof D;
+const DIMS = Object.keys(D) as Dim[];
+function generate(rand: (k: number) => number, seen: Record<string, Set<string>>, combos: Set<string>): string {
+	const pick: Record<string, string> = {};
+	for (const d of DIMS) {
+		const v = String(D[d][rand(D[d].length)]);
+		pick[d] = v;
+		(seen[d] ??= new Set()).add(v);
+	}
+	combos.add(DIMS.map((d) => pick[d]).join("\u0001"));
+	const c = pick.char;
+	const body = pick.container + pick.left + c.repeat(Number(pick.openLength)) + pick.inner + c.repeat(Number(pick.closeLength)) + pick.right + pick.after;
+	return rand(3) === 0 ? "Intro " + body : body;
+}
+
+const REPLIES = 6000;
+describe("generated replies", () => {
+	test("preservation and no false color", () => {
+		const rand = rng(20261119);
+		const seen: Record<string, Set<string>> = {};
+		const combos = new Set<string>();
+		const fails: string[] = [];
 		let colored = 0;
 		for (let r = 0; r < REPLIES; r++) {
-			const classes = new Set<string>();
-			const md = reply(classes);
-			for (const c of classes) counts[c]++;
-			const raw = render(md);
-			const out = render(ext.draw(md));
-			if (out.includes(ON)) colored++;
-			if (shown(out) !== shown(raw) || colorOutsideBold(out) !== "") failures.push(JSON.stringify(md) + "\n  pi:    " + JSON.stringify(shown(raw)) + "\n  drawn: " + JSON.stringify(shown(out)) + "\n  color outside bold: " + JSON.stringify(colorOutsideBold(out)));
+			let md = generate(rand, seen, combos);
+			if (rand(2)) md += "\n" + generate(rand, seen, combos);
+			// Narrow: a table that pi shows raw. (Elsewhere a label icon takes width and may wrap the line elsewhere.)
+			const width = md.includes("|") && rand(3) === 0 ? 8 : 2000;
+			const { raw, drawn } = compare(md, width);
+			if (drawn.text.length && ext.draw(md).includes(BOLD_FG)) colored++;
+			if (drawn.text !== raw.text || drawn.style !== raw.style || drawn.targets.join() !== raw.targets.join() || drawn.falseColor !== "")
+				fails.push(JSON.stringify(md) + " width " + width + "\n  pi:    " + JSON.stringify(raw.text) + " " + raw.style + " " + JSON.stringify(raw.targets) + "\n  drawn: " + JSON.stringify(drawn.text) + " " + drawn.style + " " + JSON.stringify(drawn.targets) + " false color " + JSON.stringify(drawn.falseColor));
 		}
-		console.log("replies:", REPLIES, "; with bold color:", colored, "; per class:", JSON.stringify(counts), "; failures:", failures.length);
-		for (const n of NAMES) expect(counts[n]).toBeGreaterThan(0);
-		expect(colored).toBeGreaterThan(REPLIES / 4);
-		expect(failures.slice(0, 5)).toEqual([]);
+		const values = Object.fromEntries(DIMS.map((d) => [d, seen[d].size + "/" + new Set(D[d].map(String)).size]));
+		console.log("replies:", REPLIES, "; realized combinations:", combos.size, "; values per dimension:", JSON.stringify(values), "; with bold color:", colored, "; failures:", fails.length);
+		for (const d of DIMS) expect(seen[d].size).toBe(new Set(D[d].map(String)).size);
+		expect(fails.slice(0, 4)).toEqual([]);
+	});
+	test("required color on unambiguous spans", () => {
+		const rand = rng(7);
+		const WORDS = ["alpha", "beta", "gamma", "delta", "omega"];
+		const word = () => WORDS[rand(WORDS.length)];
+		const fails: string[] = [];
+		let spans = 0;
+		for (let r = 0; r < 1500; r++) {
+			const parts: string[] = [];
+			for (let n = 1 + rand(5); n > 0; n--) {
+				const inner = Array.from({ length: 1 + rand(3) }, word).join(rand(4) === 0 ? "\n" : " ");
+				parts.push(rand(2) ? "**" + inner + "**" : word());
+				if (parts[parts.length - 1].startsWith("**")) spans++;
+			}
+			const md = parts.join(rand(5) === 0 ? "\n" : " ");
+			const { raw, drawn } = compare(md);
+			if (drawn.uncolored !== "" || drawn.text !== raw.text) fails.push(JSON.stringify(md) + " uncolored " + JSON.stringify(drawn.uncolored));
+		}
+		console.log("unambiguous replies: 1500 ; bold spans:", spans, "; failures:", fails.length);
+		expect(fails.slice(0, 4)).toEqual([]);
 	});
 });

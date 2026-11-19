@@ -21,7 +21,7 @@
 //     settings.json sets edges, icons, label color, tone colors and fill (readSettings()).
 import type { ExtensionAPI, Theme, ThemeBg, ThemeColor, ThemeToken } from "@earendil-works/pi-coding-agent";
 import { backgroundAnsi, type Color, colorToRgb, foregroundAnsi, mixColors, parseColor, type RgbColorValue, rgbColor } from "@earendil-works/pi-tui";
-import { CJK_CHAR, countPlace, type EndState, mayDefine, type Range, type ReadLine, readBlocks, readMarkdown, runKind, strongPairs } from "./reader.ts";
+import { CJK_CHAR, countPlace, type EndState, mayDefine, opensLeft, type Range, type ReadLine, readBlocks, readMarkdown, runKind, strongPairs } from "./reader.ts";
 
 type Colorize = (text: string) => string;
 type PillTone = "success" | "error" | "warning" | "ask" | "danger" | "mode" | "owner" | "neutral";
@@ -424,6 +424,16 @@ const charBefore = (text: string, at: number) => {
 	return at >= 2 && low >= 0xdc00 && low <= 0xdfff ? text.slice(at - 2, at) : text[at - 1];
 };
 const BOLD_RUN = /\*\*|__/;
+/** A line that may open an HTML block (after quote and list markers): pi shows its text as written. */
+const HTML_START = /^[ \t>]*(?:(?:[-*+]|\d+[.)])[ \t]+)*</;
+/** A GFM table delimiter row (after quote and list markers): pi reads each cell alone, or the table raw when narrow. */
+const TABLE_DELIMITER = /^[ \t>]*(?:(?:[-*+]|\d+[.)])[ \t]+)*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
+/** A sign that may open math pi reads as pending to the end of the text: "$" not before a digit (the drawing escapes those), "\(" or "\[". */
+const MATH_SIGN = /\$(?!\d)|\\[(\[]/g;
+/** Text inside a span that ends in a bare URL or email address: a restore escape after it would join its link target. */
+const LINK_TEXT = /:\/\/|www\.|@/i;
+/** Characters after a literal range (inside a span) that the restore escape before them would change. */
+const AFTER_LITERAL = "*_~\\";
 
 /**
  * Which bold delimiters each line draws. Only a span that pi's parser makes (strongPairs) is drawn, and only
@@ -467,8 +477,31 @@ function boldPlans(lines: string[], read: ReadLine[]): (LinePlan | undefined)[] 
 			while (starts[k] > at) k--;
 			return k;
 		};
+		// Tables and HTML blocks are not one inline text for pi: nothing in them is drawn.
+		if (lines.slice(i, j).some((l) => HTML_START.test(l)) || (text.includes("|") && lines.slice(i, j).some((l) => l.includes("-") && TABLE_DELIMITER.test(l)))) {
+			i = j;
+			continue;
+		}
+		// The first sign that may open pending math, outside literal ranges: spans that reach it are not drawn.
+		let math = text.length;
+		for (const m of text.matchAll(MATH_SIGN)) {
+			if (literal.some(([s, e]) => s <= m.index && m.index < e) || !UNESCAPED_AT(text, m.index)) continue;
+			math = m.index;
+			break;
+		}
+		// The marker starts the drawing visits on each line (drawProse matches INLINE in each prose part): a planned
+		// delimiter inside a pill or literal range would never be drawn.
+		const visited = lines.slice(i, j).map((line, k) => {
+			const set = new Set<number>();
+			let at = 0;
+			for (const part of partsOf(line, read[i + k].literal)) {
+				if (!part.literal) for (const m of part.text.matchAll(INLINE)) if (m[2] !== undefined && m[1].length % 2 === 0) set.add(at + m.index + m[1].length);
+				at += part.text.length;
+			}
+			return set;
+		});
+		// lexInline emits outer pairs before inner ones, with increasing opener offsets.
 		const { pairs, crossesLine } = strongPairs(text, literal);
-		pairs.sort((a, b) => a[0] - b[0]);
 		// Lines whose own reading differs from their run's reading: pi may read either, so nothing is drawn there.
 		const unsure = new Set<number>();
 		// Without a token across a line break, each line reads alone as it reads in its run.
@@ -484,7 +517,7 @@ function boldPlans(lines: string[], read: ReadLine[]): (LinePlan | undefined)[] 
 			}
 			for (let k = 0; k < j - i; k++) {
 				if (!BOLD_RUN.test(lines[i + k])) continue;
-				const own = strongPairs(lines[i + k], read[i + k].literal).pairs.sort((a, b) => a[0] - b[0]).map(([o, c]) => o + ":" + c).join(" ");
+				const own = strongPairs(lines[i + k], read[i + k].literal).pairs.map(([o, c]) => o + ":" + c).join(" ");
 				if (own !== (inRun.get(k) ?? []).join(" ")) unsure.add(k);
 			}
 		}
@@ -497,15 +530,20 @@ function boldPlans(lines: string[], read: ReadLine[]): (LinePlan | undefined)[] 
 			const innerFirst = charAt(text, o + 2);
 			const innerLast = charBefore(text, c);
 			if ("*_~".includes(innerFirst) || "*_~".includes(innerLast)) continue;
-			const inner = text.slice(o + 2, c);
-			if (inner.includes("@") || inner.includes("](")) continue;
+			// An escape's "[" with a later "](" makes a link; text with a URL or email may take an escape into its target.
+			if (c + 2 > math || text.includes("](", o) || LINK_TEXT.test(text.slice(o + 2, c))) continue;
 			const run = d + d;
 			const before = charBefore(text, o);
 			const after = charAt(text, c + 2);
 			if (runKind(before, run, innerFirst) !== runKind(before, run, "\x1b") || runKind(innerLast, run, after) !== runKind("m", run, after)) continue;
+			if (opensLeft(before, run, innerFirst) !== opensLeft(before, run, "\x1b")) continue;
+			// The bold color is restored after each literal range inside the span: not before a character the escape
+			// would change, and not after HTML or an autolink (pi drops a comment with its space).
+			if (literal.some(([s, e]) => s > o && s < c && (text[s] === "<" || AFTER_LITERAL.includes(text[e] ?? "")))) continue;
 			const lo = lineOf(o);
 			const lc = lineOf(c);
 			if (unsure.has(lo) || unsure.has(lc)) continue;
+			if (!visited[lo].has(o - starts[lo]) || !visited[lc].has(c - starts[lc])) continue;
 			if (lo !== lc) {
 				// The color ends at each line end and starts again after the next line's indent: the characters
 				// there keep their class only when they are plain.
@@ -918,9 +956,11 @@ const escapeProse = (text: string) =>
 
 // An action lead-in after a drawn opening "**": the word, then ":**".
 const ACTION_AFTER = new RegExp(String.raw`^(${Object.keys(ACTION_ICONS).join("|")})(?=:\*\*)`, "i");
-const actionIcon = (rest: string) => {
+/** The icon of an action lead-in in rest, the text after a drawn opener at start, when its ":**" is the drawn closer. */
+const actionIcon = (rest: string, start: number | undefined, marks: Map<number, "open" | "close"> | undefined) => {
 	const word = ACTION_AFTER.exec(rest)?.[1];
-	return word === undefined ? "" : ACTION_ICONS[word.toLowerCase()] + ICON_SPACE;
+	if (word === undefined || start === undefined || marks?.get(start + 2 + word.length + 1) !== "close") return "";
+	return ACTION_ICONS[word.toLowerCase()] + ICON_SPACE;
 };
 
 // A prose line without any of these marks draws as written: every step below leaves it unchanged.
@@ -928,6 +968,9 @@ const PROSE_MARKS = /\[\[|\*\*|__|\$|[✓✔✗✘→├└]/;
 const GLYPHS = /[✓✔✗✘→├└]/;
 /** Characters that may be part of an emphasis or strikethrough delimiter. */
 const DELIMITER_CHARS = "*_~";
+const DELIMITER_IN = /[*_~]/;
+/** A character that may be part of an email address's local part (marked's GFM email rule). */
+const EMAIL_CHAR = /[A-Za-z0-9._+-]/;
 
 function drawProse(line: string, literal: Range[], palette: Palette, open: string, close: string, drawn?: string[], plan?: LinePlan): string {
 	if (!plan?.continued && !PROSE_MARKS.test(line)) return line;
@@ -976,9 +1019,13 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
 		let n = 0;
 		// A pill or glyph next to a delimiter is drawn as written: its color escapes would change how pi reads the
 		// delimiter. Next to a drawn delimiter, on the side inside the bold, it is drawn.
+		// At the part's end, the next character is the first of a literal range: an email address there would take
+		// the escape's "49m" or "39m" into its link target.
+		const next = line[partAt + written[p].length];
 		const kept = (m: string, index: number, start: number | undefined) => {
 			const before = prose[index - 1];
 			const after = prose[index + m.length];
+			if (after === undefined && next !== undefined && EMAIL_CHAR.test(next)) return true;
 			return (
 				(before !== undefined && DELIMITER_CHARS.includes(before) && (start === undefined || marks!.get(start - 2) !== "open")) ||
 				(after !== undefined && DELIMITER_CHARS.includes(after) && (start === undefined || marks!.get(start + m.length) !== "close"))
@@ -998,14 +1045,15 @@ function drawProse(line: string, literal: Range[], palette: Palette, open: strin
 				return match;
 			}
 			if (label !== undefined) {
-				if (!palette.pills || !label.trim() || kept(match, index, start)) return match;
+				// A label with a delimiter character stays as written: pi may pair it with a delimiter outside the pill.
+				if (!palette.pills || !label.trim() || DELIMITER_IN.test(label) || kept(match, index, start)) return match;
 				drawn?.push(label);
 				return pill(label, palette) + reopen();
 			}
 			const mark = start === undefined || slashes!.length % 2 === 1 ? undefined : marks!.get(start);
 			if (mark === "open") {
 				inBold = true;
-				return slashes! + marker + open + actionIcon(prose.slice(index + match.length, index + match.length + 12));
+				return slashes! + marker + open + actionIcon(prose.slice(index + match.length, index + match.length + 12), start, marks);
 			}
 			if (mark === "close") {
 				inBold = false;

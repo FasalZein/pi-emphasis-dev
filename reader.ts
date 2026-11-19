@@ -955,6 +955,7 @@ export function countPlace(read: ReadLine[]): number {
 // Strong pairs: which "**" and "__" runs pi's parser pairs as bold. A port of the inline lexer loop of marked
 // 18.0.11 (gfm, not breaks) with the emStrong tokenizer of marked-cjk-friendly 0.1.2, as pi-tui 1.5.2 configures
 // them (components/markdown.js). The regular expressions are copied from those two packages; neither loads here.
+// Their MIT notices: THIRD-PARTY-NOTICES.md.
 // Code spans, math, HTML and autolinks are the reader's literal ranges (one token each, as pi's tokenizers read
 // them). Not ported: reference links with a definition (read as text, like an undefined reference).
 // ---------------------------------------------------------------------------------------------------------------
@@ -1027,6 +1028,20 @@ function prevIsCjk(prev: string, masked: string, at: number): boolean {
 		} else cjk = CJK_CHAR.test(String.fromCharCode(code));
 	}
 	return cjk;
+}
+
+/**
+ * Whether marked-cjk-friendly's emStrong accepts the delimiter run as an opener before it scans for a closer, with
+ * prev the character before the run and next the character after it.
+ */
+export function opensLeft(prev: string, run: string, next: string): boolean {
+	const text = run + next;
+	L_DELIM.lastIndex = 0;
+	const match = L_DELIM.exec(text);
+	if (!match || !(match[1] || match[2] || match[3] || match[4])) return false;
+	if (match[4] && ALPHANUMERIC.test(prev)) return false;
+	const first = match[1] || match[3] || "";
+	return !first || !prev || PUNCTUATION_BEFORE.test(prev) || PREV_CJK.test(prev) || CJK_CHAR.test(prev) || CJK_CHAR.test(first);
 }
 
 /** marked-cjk-friendly emStrong at index at of text: the token's end and its delimiter lengths, or undefined. */
@@ -1192,7 +1207,10 @@ function lexInline(all: string, from: number, to: number, literal: Range[], inLi
 		if (fast) {
 			let end = text.length;
 			if (r < literal.length) end = Math.min(end, literal[r][0] - from);
-			NEXT_SIGN.lastIndex = i + 1;
+			// marked's text rule takes a run of tildes (an unmatched strikethrough) as one token.
+			let next = i + 1;
+			if (c === "~") while (text[next] === "~") next++;
+			NEXT_SIGN.lastIndex = next;
 			const sign = NEXT_SIGN.exec(text);
 			if (sign && sign.index < end) end = sign.index;
 			const last = text[end - 1];
