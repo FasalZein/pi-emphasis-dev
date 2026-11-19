@@ -45,8 +45,15 @@ const LINK_TITLE = String.raw`(?:"(?:\\"?|[^"\\])*"|'(?:\\'?|[^'\\])*'|\((?:\\\)
 // A link reference definition (marked's def rule): pi shows nothing of it. Its destination and its title may
 // each sit on the next line. Matched against the definition's lines joined with "\n".
 const DEFINITION = new RegExp(String.raw`^\[(?!\s*\])((?:\\.|[^\[\]\\])+)\]: *(?:\n[ \t]*)?(?:[^<\s]\S*|<.*?>)(?:(?: +(?:\n[ \t]*)?| *\n[ \t]*)${LINK_TITLE})? *(?=\n|$)`);
-// The label of a line that may define a link (looser than DEFINITION: used to know which labels pi can link).
-const DEFINED_LABEL = /^ {0,3}(?:> ?)*\s*(?:(?:[-*+]|\d{1,9}[.)]) +)?\[((?:\\.|[^\[\]\\])+)\]:/;
+// The label of a line that may define a link (looser than DEFINITION: used to know which labels pi can link),
+// after any block quote and list markers, in any order and nesting.
+const DEFINED_LABEL = /^[ \t]*(?:(?:>|[-*+]|\d{1,9}[.)])[ \t]*)*\[((?:\\.|[^\[\]\\])+)\]:/;
+// A line that opens a label without closing it: a definition's label may go on over the next lines.
+const LABEL_OPEN = /^[ \t]*(?:(?:>|[-*+]|\d{1,9}[.)])[ \t]*)*\[((?:\\.|[^\[\]\\])+)$/;
+// A line that closes a label opened on an earlier line and defines it.
+const LABEL_TAIL = /^(?:\\.|[^\[\]\\])*\]:/;
+// The container markers before a label's next line.
+const CONTAINER_PREFIX = /^[ \t>]*/;
 const labelKey = (label: string) => label.trim().replace(/\s+/g, " ").toLowerCase();
 // An inline link's destination and title from its "(" (marked's link rule), over lines joined with "\n".
 const LINK_TARGET = new RegExp(String.raw`^\(\s*(?:<(?:\\.|[^\n<>\\])+>|[^ \t\n\x00-\x1f()]*(?:\([^ \t\n\x00-\x1f()]*\)[^ \t\n\x00-\x1f()]*)*)(?:(?:[ \t]+(?:\n[ \t]*)?|\n[ \t]*)${LINK_TITLE})?\s*\)`);
@@ -55,6 +62,8 @@ const EMAIL = /^[A-Za-z0-9._+-]+@[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(
 // An autolink (marked's autolink rule): its target is the link, never prose.
 const AUTOLINK = /^<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s\x00-\x1f<>]*|[A-Za-z0-9.!#$%&'*+/=?^_\x60{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+)>/;
 
+// pi-tui 1.5.2's cjkPunctuationRegex (utils.js, not exported): its bare URLs stop at CJK punctuation.
+const CJK_PUNCTUATION = /(?:(?=\p{Punctuation})[\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}\p{Script_Extensions=Hangul}\p{Script_Extensions=Bopomofo}]|[，．：；！？（）［］｛｝“”‘’…—])/u;
 // A bare URL (marked's GFM url rule and its trailing-punctuation backpedal): pi links it as a whole.
 const URL_START = /(?:[hH][tT][tT][pP][sS]?|[fF][tT][pP]):\/\/|www\.|[A-Za-z0-9._+-]+@/g;
 const URL = /^(?:(?:[hH][tT][tT][pP][sS]?|[fF][tT][pP]):\/\/|www\.)(?:[a-zA-Z0-9-]+\.?)+[^\s<]*/;
@@ -66,16 +75,55 @@ function urlStart(text: string, from: number): number {
 }
 /** The end of the bare URL or email address at index at, or -1. */
 function urlEnd(text: string, at: number): number {
-	const rest = text.slice(at);
+	const length = piUrlLength(text.slice(at));
+	return length > 0 ? at + length : -1;
+}
+/** The length of marked's bare URL or email address at the start of rest, 0 for none. */
+function markedUrlLength(rest: string): number {
 	const email = rest.match(EMAIL);
-	if (email) return at + email[0].length;
+	if (email) return email[0].length;
 	let url = rest.match(URL)?.[0];
-	if (url === undefined) return -1;
+	if (url === undefined) return 0;
 	for (let previous = ""; previous !== url; ) {
 		previous = url;
 		url = URL_BACKPEDAL.exec(url)?.[0] ?? "";
 	}
-	return url ? at + url.length : -1;
+	return url.length;
+}
+/** pi's bare URL (pi-tui's MarkdownTokenizer.url): marked's, read again up to its first CJK punctuation. */
+function piUrlLength(rest: string): number {
+	const length = markedUrlLength(rest);
+	const cut = length > 0 ? rest.slice(0, length).search(CJK_PUNCTUATION) : -1;
+	return cut < 0 ? length : markedUrlLength(rest.slice(0, cut));
+}
+/** The index of the "]" that closes the reference label opening at from, or -1 at an unescaped "[" or none. */
+function labelEnd(text: string, from: number): number {
+	for (let q = from; q < text.length; q++) {
+		const c = text[q];
+		if (c === "\\") q++;
+		else if (c === "[") return -1;
+		else if (c === "]") return q;
+	}
+	return -1;
+}
+/** text holds a "[" or "]" that no backslash escapes (a label holds none). */
+const hasBareBracket = (text: string) => {
+	for (let q = 0; q < text.length; q++) {
+		const c = text[q];
+		if (c === "\\") q++;
+		else if (c === "[" || c === "]") return true;
+	}
+	return false;
+};
+/** The index in line of index e of its tab-expanded form (pi's three spaces per tab). */
+function originalIndex(line: string, e: number): number {
+	if (!line.includes("\t")) return e;
+	let x = 0;
+	for (let o = 0; o < line.length; o++) {
+		if (x >= e) return o;
+		x += line[o] === "\t" ? 3 : 1;
+	}
+	return line.length;
 }
 
 /**
@@ -167,13 +215,47 @@ function backtickRun(text: string, from: number, n: number): number {
 	return -1;
 }
 
-/** A line that may define a link label: a reference link before it may read differently once it arrives. */
-export const mayDefine = (line: string) => {
-	// Only a line that opens with "[", a space, a tab, ">", a list marker or a digit can (checked first: cheap).
-	const c = line.charCodeAt(0);
-	if (!(c === 0x5b || c === 0x20 || c === 0x09 || c === 0x3e || c === 0x2d || c === 0x2a || c === 0x2b || (c >= 0x30 && c <= 0x39))) return false;
-	return line.includes("]:") && DEFINED_LABEL.test(line);
-};
+/**
+ * A line that may define a link label (the opening line of a label, or the line that closes one opened on an
+ * earlier line): a reference link before it may read differently once it arrives. A superset of the lines
+ * that complete a label in the reference reader (labelsOf).
+ */
+export const mayDefine = (line: string) => line.includes("]:") && (DEFINED_LABEL.test(line) || LABEL_TAIL.test(line));
+
+/** Per label key, the lines that may define it: a label on one line, or one that goes on over the next lines. */
+function labelsOf(lines: string[]): Map<string, number[]> {
+	const labels = new Map<string, number[]>();
+	const add = (label: string, line: number) => {
+		const key = labelKey(label);
+		const at = labels.get(key);
+		if (at) at.push(line);
+		else labels.set(key, [line]);
+	};
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		if (!line.includes("[")) continue;
+		const m = line.includes("]:") ? line.match(DEFINED_LABEL) : null;
+		if (m) {
+			add(m[1], i);
+			continue;
+		}
+		const open = line.match(LABEL_OPEN);
+		if (!open) continue;
+		// marked's label may hold line breaks, within the definition's paragraph (here up to 8 lines, as the reader).
+		let label = open[1];
+		for (let k = i + 1; k < lines.length && k <= i + 8 && lines[k].trim(); k++) {
+			const next = lines[k].replace(CONTAINER_PREFIX, "");
+			const tail = next.match(LABEL_TAIL);
+			if (tail) {
+				add(label + "\n" + tail[0].slice(0, -2), i);
+				break;
+			}
+			if (hasBareBracket(next)) break;
+			label += "\n" + next;
+		}
+	}
+	return labels;
+}
 
 export function readMarkdown(lines: string[]): ReadLine[] {
 	return readBlocks(lines).read;
@@ -186,7 +268,36 @@ export function readMarkdown(lines: string[]): ReadLine[] {
  * the reading of those lines alone (with indexes shifted by b + 1). -1 when there is none.
  */
 export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: number; end: EndState } {
+	const first = readPass(lines);
+	// A label that only lines in a fenced code block define links nothing for pi: read again without those
+	// lines. (Rare: only a reference used in prose with its only definition in such a fence reads twice.)
+	return first.fencedOnly ? readPass(lines, first.sureFences) : first;
+}
+
+/** A top-level fence the reader is sure of: no HTML, math or container around its opening line. */
+interface SureFence {
+	/** The line after its opening line. */
+	start: number;
+	char: string;
+	length: number;
+}
+/**
+ * Line j is inside a sure fence. Its end is read loosely: any line that opens with the fence's character run
+ * ends it, so a closing line the reader would not take never extends the fence over a real definition.
+ */
+function inSureFence(lines: string[], fences: SureFence[], j: number): boolean {
+	return fences.some((f) => {
+		if (j < f.start) return false;
+		for (let k = f.start; k <= j; k++) if (lines[k].replace(/^[ \t]*/, "").startsWith(f.char.repeat(f.length))) return false;
+		return true;
+	});
+}
+
+/** One reading. skip: the sure fences of a first reading, whose lines define no label in this one. */
+function readPass(lines: string[], skip?: SureFence[]): { read: ReadLine[]; boundary: number; end: EndState; fencedOnly: boolean; sureFences: SureFence[] } {
 	const read: ReadLine[] = [];
+	const sureFences: SureFence[] = [];
+	const skipFenced = skip !== undefined;
 	// The end marker of an open top-level HTML block of CommonMark types 1, 3, 4 and 5, which a blank line does
 	// not close (type 2, a comment, is read as code below). The reading of its lines is unchanged; the state
 	// only keeps finished-block boundaries out of it and tells the caller that the reply ends inside it.
@@ -239,8 +350,14 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 	const code: ReadLine = { kind: "code", literal: [], plain: false };
 
 	// pi shows the text as written (pending math): it holds no link.
-	// In a paragraph that opens with "<" pi may show an HTML block as written: link metadata is drawn as before.
-	const asWritten = () => mathOff || pendingMath || containerMath || htmlParagraph;
+	// In an HTML block pi shows the text as written: link metadata is drawn as before. A line that opens with
+	// "<" but opens no HTML block (an autolink, an inline tag) and a line after an HTML block's closing line
+	// are not: their links stay literal.
+	const asWritten = () => mathOff || pendingMath || containerMath || htmlShown;
+	// The current line is in an HTML block (htmlShown); the block that goes on after it: to a blank line, or
+	// (types 1, 3-5) to its end marker.
+	let htmlShown = false;
+	let htmlShow: false | "flow" | RegExp = false;
 	// Set at a math mark in a quote or a list item, where the reader does not follow pi's math: pi may show the
 	// rest as written. Link metadata is then drawn as before. Cleared at the next top-level block after a blank line.
 	let containerMath = false;
@@ -248,19 +365,22 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 	let definitionSeen = false;
 	let definitionChecked = 0;
 	// The labels that a definition line may define (for reference links), read once per reading when needed.
-	let defined: Set<string> | undefined;
+	let defined: Map<string, number[]> | undefined;
 	const isDefined = (label: string) => {
 		// A label holds no unescaped bracket.
-		if (label.includes("[") || label.includes("]")) return false;
-		if (!defined) {
-			defined = new Set();
-			for (const line of lines) {
-				const m = mayDefine(line) ? line.match(DEFINED_LABEL) : null;
-				if (m) defined.add(labelKey(m[1]));
-			}
+		if (hasBareBracket(label)) return false;
+		defined ??= labelsOf(lines);
+		const at = defined.get(labelKey(label));
+		if (!at) return false;
+		// The first reading does not know the fences after this line yet: it takes the label as defined, and
+		// readBlocks reads again when only fenced lines define it (checked after the reading).
+		if (!skipFenced) {
+			consulted.add(labelKey(label));
+			return true;
 		}
-		return defined.has(labelKey(label));
+		return at.some((j) => !inSureFence(lines, skip, j));
 	};
+	const consulted = new Set<string>();
 	/**
 	 * The end of the inline link target at the "(" at index at of line i: [line, end] of its last character
 	 * plus one, or undefined. Lines of the same paragraph after line i may hold the rest.
@@ -275,7 +395,7 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 		const starts: number[] = [];
 		for (let k = i + 1; k < lines.length && k <= i + 8; k++) {
 			const next = blockOf(lines[k]);
-			if (!next.body.trim() || INTERRUPT.test(next.body) || next.depth !== blockOf(text).depth || lines[k].includes("\t")) break;
+			if (!next.body.trim() || INTERRUPT.test(next.body) || next.depth !== blockOf(text).depth) break;
 			see(k);
 			starts.push(joined.length + 1);
 			joined += "\n" + next.body;
@@ -286,8 +406,10 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 		let k = starts.length - 1;
 		while (k >= 0 && starts[k] > m[0].length) k--;
 		if (k < 0) return [i, at + m[0].length];
+		// The end in the line as written: pi read it with each tab as three spaces.
 		const line = lines[i + 1 + k];
-		return [i + 1 + k, line.length - blockOf(line).body.length + m[0].length - starts[k]];
+		const expanded = line.includes("\t") ? line.replace(/\t/g, "   ") : line;
+		return [i + 1 + k, originalIndex(line, expanded.length - blockOf(line).body.length + m[0].length - starts[k])];
 	};
 	// The literal ranges of line i from "from" on.
 	const inline = (i: number, from: number, multiline: boolean): Range[] => {
@@ -330,7 +452,13 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 				else if (ch === "]") {
 					if (label.dead) return false;
 					if (text[q + 1] === "(") return linkTargetEnd(text, q + 1) > 0;
-					return text[q + 1] === "[" || isDefined(text.slice(label.at + 1, q));
+					// A full or collapsed reference is a link only when its label is defined; an undefined one is text.
+					const close = text[q + 1] === "[" ? labelEnd(text, q + 2) : -1;
+					if (close >= 0) {
+						const ref = text.slice(q + 2, close);
+						return isDefined(ref.trim() ? ref : text.slice(label.at + 1, q));
+					}
+					return isDefined(text.slice(label.at + 1, q));
 				}
 			}
 			return false;
@@ -372,9 +500,9 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 						if (text[p + 1] === "(") end = targetEnd(i, p + 1, multiline);
 						else if (text[p + 1] === "[") {
 							// A full reference link [text][ref] or a collapsed one [ref][].
-							const close = text.indexOf("]", p + 2);
+							const close = labelEnd(text, p + 2);
 							const ref = close > 0 ? text.slice(p + 2, close) : undefined;
-							if (ref !== undefined && !ref.includes("[") && isDefined(ref.trim() ? ref : text.slice(label.at + 1, p))) end = [i, close + 1];
+							if (ref !== undefined && isDefined(ref.trim() ? ref : text.slice(label.at + 1, p))) end = [i, close + 1];
 						} else if (!(text[label.at - 1] === "[" && text[p + 1] === "]") && isDefined(text.slice(label.at + 1, p))) end = [i, p + 1];
 						// (The inner label of a pill, "[[x]]", is not read as a shortcut reference: a documented limit.)
 						if (end) {
@@ -617,6 +745,7 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 			paragraph = false;
 			htmlParagraph = false;
 			htmlFlow = false;
+			htmlShow = false;
 			push({ kind: "blank", literal: [], plain: false }, i);
 			const clean = !fence && indentedBase === undefined && !paragraph && !emptyItem && previousDepth === 0 && listColumns.length === 0;
 			// A definition gives meaning to reference links before it, so no head holds one.
@@ -625,6 +754,9 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 			if (clean && !definitionSeen && seen <= i && !containerMath && !mathOff && !pendingMath && !inlineCarry && !htmlParagraph && literalUntil === undefined && !discovering && !htmlEnd) boundary = i;
 			continue;
 		}
+		// This line is in the HTML block of the lines before it; the end marker's line is the block's last.
+		htmlShown = htmlShow !== false;
+		if (htmlShow instanceof RegExp && htmlShow.test(lines[i])) htmlShow = false;
 		// After a blank line, a line indented less than a list item's content ends that item.
 		// Any other line indented less than an item's content, except a lazy paragraph line, ends it too.
 		if (containerMath && depth === 0 && read[i - 1]?.kind === "blank" && (listColumns.length === 0 || indent < listColumns[0])) containerMath = false;
@@ -743,6 +875,8 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 		const open = content.match(FENCE_OPEN);
 		if (open && (marker || innerDepth > 0 || indent - base <= 3) && !(open[1][0] === "\x60" && open[2].includes("\x60"))) {
 			fence = { char: open[1][0], length: open[1].length, base: innerDepth ? 0 : contentBase, depth: depth + innerDepth, line: i };
+			if (depth + innerDepth === 0 && !marker && listColumns.length === 0 && !inHtml && !htmlParagraph && !mathOff && !pendingMath && !containerMath)
+				sureFences.push({ start: i + 1, char: fence.char, length: fence.length });
 			paragraph = false;
 			push(code, i);
 			continue;
@@ -766,7 +900,8 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 		}
 		// A link reference definition, outside a paragraph (a new list item or quote opens none): pi shows none
 		// of it. Its destination and title may go on over the next lines of the same quote depth.
-		if ((!paragraph || newItem || innerDepth > 0) && !lazy && !mathOff && !containerMath && !htmlParagraph && content[0] === "[" && content.includes("]:")) {
+		// The label may go on over the next lines: a first line with no "]" may open one.
+		if ((!paragraph || newItem || innerDepth > 0) && !lazy && !mathOff && !containerMath && !htmlParagraph && content[0] === "[" && (content.includes("]:") || (content[1] !== "[" && !content.includes("]")))) {
 			let joined = content;
 			let k = i + 1;
 			for (; k < lines.length && k <= i + 8; k++) {
@@ -809,6 +944,18 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 		}
 		// An empty list item holds no paragraph yet.
 		// An HTML block (such as "<div>") may also interrupt a paragraph.
+		if (content.startsWith("<") && !htmlShown && !(paragraph && indent - base > 3)) {
+			// pi's HTML blocks (marked's html rule): types 1, 3-5 up to the line with their end marker; type 6, and
+			// type 7 (a lone tag, which interrupts no paragraph), up to a blank line.
+			const until = HTML_UNTIL.find(([opens]) => opens.test(content));
+			if (until) {
+				htmlShown = true;
+				htmlShow = until[1].test(content.slice(2)) ? false : until[1];
+			} else if (HTML_FLOW.test(content) || ((!paragraph || newItem) && HTML_TAG_LINE.test(content))) {
+				htmlShown = true;
+				htmlShow = "flow";
+			}
+		}
 		if (content.startsWith("<")) {
 			htmlParagraph = true;
 			const kind = plain && !lazy && !inHtml ? HTML_UNTIL.find(([opens]) => opens.test(content)) : undefined;
@@ -837,7 +984,9 @@ export function readBlocks(lines: string[]): { read: ReadLine[]; boundary: numbe
 	const open = htmlEnd !== undefined || mathOff;
 	// After the closing line of an HTML block of types 1, 3-5 pi starts a new block: the text there is not HTML.
 	const htmlText = htmlParagraph && !(htmlClosedAt >= 0 && htmlClosedAt < lines.length - 1);
-	return { read, boundary, end: { open, literal: open || htmlText || pendingMath || containerMath || literalUntil !== undefined } };
+	// A label the reading took as defined whose only defining lines are inside a sure fence.
+	const fencedOnly = !skipFenced && sureFences.length > 0 && [...consulted].some((key) => defined!.get(key)!.every((j) => inSureFence(lines, sureFences, j)));
+	return { read, boundary, end: { open, literal: open || htmlText || pendingMath || containerMath || literalUntil !== undefined }, fencedOnly, sureFences };
 }
 
 /** The reader's state after the last line. */
@@ -855,6 +1004,8 @@ const HTML_UNTIL: [RegExp, RegExp][] = [
 	[/^<![A-Za-z]/, />/],
 ];
 
+// CommonMark HTML block type 7 (marked's html rule): an open or closing tag alone on its line.
+const HTML_TAG_LINE = /^(?:<(?!script|pre|style|textarea)[a-z][\w-]*(?: +[a-z:_][\w.:-]*(?: *= *"[^"\n]*"| *= *'[^'\n]*'| *= *[^\s"'=<>\x60]+)?)*? *\/?>|<\/(?!script|pre|style|textarea)[a-z][\w-]*\s*>)[ \t]*$/i;
 // CommonMark HTML block type 6 (marked's tag list): it ends at a blank line and may interrupt a paragraph.
 const HTML_FLOW = /^<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:\s|\/?>|$)/i;
 
@@ -1009,6 +1160,21 @@ const GFM_URL = /((?:[hH][tT][tT][pP][sS]?|[fF][tT][pP]):\/\/|www\.)(?:[a-zA-Z0-
 const BACKPEDAL = /^(?:[^?!.,:;*_'"~()&]+|\([^)]*\)|&(?![a-zA-Z0-9]+;$)|[?!.,:;*_'"~)]+(?!$))+/;
 // marked's gfm inlineText rule. "protocol" is not grouped there, so text stops before any "http" or "ftp".
 const TEXT = /(\x60+|~+|[^\x60~])(?:(?=[\x60~])|(?= {2,}\n)|(?=[a-zA-Z0-9.!#$%&'*+\/=?_\x60{\|}~-]+@)|[\s\S]*?(?:(?=[\\<!\[\x60*~_]|\b_|[hH][tT][tT][pP][sS]?|[fF][tT][pP]:\/\/|www\.|$)|[^ ](?= {2,}\n)|[^a-zA-Z0-9.!#$%&'*+\/=?_\x60{\|}~-](?=[a-zA-Z0-9.!#$%&'*+\/=?_\x60{\|}~-]+@)))/y;
+/** The length of marked's gfm url token at index at of text (its email or backpedaled URL), 0 for none. */
+function gfmUrlLength(text: string, at: number): number {
+	GFM_URL.lastIndex = at;
+	const url = GFM_URL.exec(text);
+	if (!url) return 0;
+	let raw = url[0];
+	if (url[2] !== "@") {
+		let before: string;
+		do {
+			before = raw;
+			raw = BACKPEDAL.exec(raw)?.[0] ?? "";
+		} while (before !== raw);
+	}
+	return raw.length;
+}
 /** Where pi's inline math extension may start (its startInline): text stops before it. */
 const MATH_START = /\$|\\[(\[]/g;
 
@@ -1228,21 +1394,13 @@ function lexInline(all: string, from: number, to: number, literal: Range[], inLi
 			}
 		}
 		if (!inLink) {
-			GFM_URL.lastIndex = i;
-			const url = GFM_URL.exec(text);
-			if (url) {
-				let raw = url[0];
-				if (url[2] !== "@") {
-					let before: string;
-					do {
-						before = raw;
-						raw = BACKPEDAL.exec(raw)?.[0] ?? "";
-					} while (before !== raw);
-				}
-				if (raw.length > 0) {
-					i += raw.length;
-					continue;
-				}
+			// pi's url tokenizer reads marked's bare URL again up to its first CJK punctuation.
+			let length = gfmUrlLength(text, i);
+			const cut = length > 0 ? text.slice(i, i + length).search(CJK_PUNCTUATION) : -1;
+			if (cut >= 0) length = gfmUrlLength(text.slice(i, i + cut), 0);
+			if (length > 0) {
+				i += length;
+				continue;
 			}
 		}
 		// The text token stops before a possible math start (pi's startInline) and before a literal range.
